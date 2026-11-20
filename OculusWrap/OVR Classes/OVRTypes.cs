@@ -1617,6 +1617,7 @@ namespace OculusWrap
 		/// The ovrButton_Up/Down/Left/Right map to both XBox D-Pad and directional buttons.
 		/// The ovrButton_Enter and ovrButton_Return map to Start and Back controller buttons, respectively.
 		/// </summary>
+		[Flags]
 		public enum Button
 		{    
 			A         = 0x00000001,
@@ -1674,6 +1675,7 @@ namespace OculusWrap
 		/// These values map to capacitive touch values reported ovrInputState::Touch.
 		/// Some of these values are mapped to button bits for consistency.
 		/// </summary>
+		[Flags]
 		public enum Touch
 		{
 			A              = Button.A,
@@ -1751,7 +1753,7 @@ namespace OculusWrap
 		/// and XBox gamepad. If multiple inputs are connected and used at the same time,
 		/// their inputs are combined.
 		/// </summary>
-		[StructLayout(LayoutKind.Sequential, Pack=4)]
+		[StructLayout(LayoutKind.Sequential)]
 		public struct InputState
 		{
 			/// <summary>

@@ -188,7 +188,7 @@ namespace _3Dconnexion
         [StructLayout(LayoutKind.Sequential)]
         public struct SiOpenData
         {
-            public int hWnd;
+            public IntPtr hWnd;
             public IntPtr transCtl;
             public int processID;
             [MarshalAs(UnmanagedType.ByValTStr, SizeConst = MAX_PATH)]
@@ -199,7 +199,7 @@ namespace _3Dconnexion
         [StructLayout(LayoutKind.Sequential)]
         public struct SiTypeMask
         {
-            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 8)]
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 8)]
             public byte[] mask;
         }
 
@@ -235,7 +235,7 @@ namespace _3Dconnexion
         public struct SiSpwOOB
         {
             public byte code;
-            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = SI_MAXBUF - 1)]
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = SI_MAXBUF - 1)]
             public byte[] message;
         }
 
@@ -255,7 +255,7 @@ namespace _3Dconnexion
         [StructLayout(LayoutKind.Sequential)]
         public struct SiKeyboardData
         {
-            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = SI_KEY_MAXBUF)]
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = SI_KEY_MAXBUF)]
             public byte[] kstring;
         }
 
@@ -278,6 +278,9 @@ namespace _3Dconnexion
         {
             public SiEventType type; // int
 			public SiSpwData spwData;
+			// Native SiSpwEvent union is sized to SI_KEY_MAXBUF (5120 bytes); pad to prevent buffer overflow on larger events
+			[MarshalAs(UnmanagedType.ByValArray, SizeConst = SI_KEY_MAXBUF)]
+			public byte[] _unionPadding;
 		}
 
 		[StructLayout(LayoutKind.Sequential)]
@@ -285,15 +288,8 @@ namespace _3Dconnexion
 		{
 			public SiEventType type; // int
 			public SiHWButtonData hwButtonEvent;
-		}
-
-		[StructLayout(LayoutKind.Explicit)]
-		public struct SiSpwEvent_SpwUnion
-		{
-			[FieldOffset(0)]
-			public SiSpwData spwData;
-			[FieldOffset(0)]
-			public SiHWButtonData hwButtonEvent;
+			[MarshalAs(UnmanagedType.ByValArray, SizeConst = SI_KEY_MAXBUF)]
+			public byte[] _unionPadding;
 		}
 
         [StructLayout(LayoutKind.Sequential)]

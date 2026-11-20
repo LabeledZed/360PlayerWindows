@@ -12,7 +12,7 @@ namespace _3DconnexionDriver
 
         public DeviceChangeEventArgs(int deviceId, int type)
         {
-            this.DeviceID = type;
+            this.DeviceID = deviceId;
             switch (type)
             {
                 case 0: Type = EDeviceChangeType.CONNECTED; break;

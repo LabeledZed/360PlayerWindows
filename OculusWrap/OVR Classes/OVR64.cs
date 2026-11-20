@@ -35,28 +35,13 @@ namespace OculusWrap
 			if(OculusRuntimeDll != IntPtr.Zero)
 				return;
 
-			string pathDllOvrDll = DllOvrDll;
-            
-			if(!File.Exists(pathDllOvrDll))
-			{
-				foreach(string p in Environment.GetEnvironmentVariable("Path").Split(Path.PathSeparator))
-				{
-					var dll = p + Path.DirectorySeparatorChar + DllOvrDll;
-					if (File.Exists(dll))
-					{
-						pathDllOvrDll = dll;
-						break;
-					}
-				}
-			}
-
-			if(!File.Exists(pathDllOvrDll))
-				throw new DllNotFoundException("Unable to load the file \""+pathDllOvrDll+"\", the file wasn't found.");
-
+			string pathDllOvrDll = ResolveOculusDllPath(DllOvrDll);
 			OculusRuntimeDll = LoadLibrary(pathDllOvrDll);
 			if(OculusRuntimeDll == IntPtr.Zero)
 			{
 				int win32Error = Marshal.GetLastWin32Error();
+				if (win32Error == 126) // ERROR_MOD_NOT_FOUND
+					throw new DllNotFoundException("Unable to load the file \""+pathDllOvrDll+"\", the file wasn't found.");
 				throw new Win32Exception(win32Error, "Unable to load the file \""+pathDllOvrDll+"\", LoadLibrary reported error code: "+win32Error+".");
 			}
 		}

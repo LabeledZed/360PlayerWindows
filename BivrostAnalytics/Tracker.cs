@@ -38,6 +38,8 @@ namespace BivrostAnalytics
 
 			RestRequest hitRequest = GenerateApiHit();
 
+			AddDefaultData(hitRequest);
+
 			AddDataToRequest(hitRequest, new TrackerParameters.HitParameters()
 			{
 				HitType = HitType.Screenview
@@ -74,20 +76,20 @@ namespace BivrostAnalytics
 
 		private Tracker AddDefaultData(RestRequest hitRequest)
 		{
-			if (!SessionStarted)
+			if (QuitSession)
+			{
+				AddDataToRequest(hitRequest, new TrackerParameters.SessionParameters()
+				{
+					SessionControl = SessionControlCommand.End
+				});
+			}
+			else if (!SessionStarted)
 			{
 				AddDataToRequest(hitRequest, new TrackerParameters.SessionParameters()
 				{
 					SessionControl = SessionControlCommand.Start
 				});
 				SessionStarted = true;
-			} else
-			{
-				if(QuitSession)
-					AddDataToRequest(hitRequest, new TrackerParameters.SessionParameters()
-					{
-						SessionControl = SessionControlCommand.End
-					});
 			}
 
 			AddDataToRequest(hitRequest, new TrackerParameters.ContentInformationParameters()
@@ -152,11 +154,21 @@ namespace BivrostAnalytics
 				}
 
 				
+				Type effectiveType = Nullable.GetUnderlyingType(property.PropertyType) ?? property.PropertyType;
+
 				var @switch = new Dictionary<Type, Action> {
 					{ typeof(string), () => {
 						var stringValue = (string)value;
-						var bytecount = System.Text.ASCIIEncoding.Unicode.GetByteCount(stringValue);
-						if(attr.ByteLimit>0) if(bytecount > attr.ByteLimit) throw new ArgumentOutOfRangeException();
+						if (attr.ByteLimit > 0 && Encoding.UTF8.GetByteCount(stringValue) > attr.ByteLimit)
+						{
+							byte[] utf8 = Encoding.UTF8.GetBytes(stringValue);
+							int len = attr.ByteLimit;
+							while (len > 0 && (utf8[len - 1] & 0xC0) == 0x80)
+								len--;
+							if (len > 0 && (utf8[len - 1] & 0x80) != 0)
+								len--;
+							stringValue = Encoding.UTF8.GetString(utf8, 0, len);
+						}
 						request.AddParameter(attr.QueryString, stringValue);
 						
 					} },
@@ -169,20 +181,16 @@ namespace BivrostAnalytics
 						request.AddParameter(attr.QueryString, ((uint)value));
 					} },
 
-					//{ typeof(HitType), () => {
-					//	request.AddParameter(attr.QueryString, value.ToString().ToLower());
-					//} },
-
-					//{ typeof(SessionControlCommand), () => {
-					//	request.AddParameter(attr.QueryString, value.ToString().ToLower());
-					//} },					
+					{ typeof(long), () => {
+						request.AddParameter(attr.QueryString, ((long)value).ToString(CultureInfo.InvariantCulture));
+					} },
 				};
 
-				if (@switch.ContainsKey(property.PropertyType))
-					@switch[property.PropertyType]();
+				if (@switch.ContainsKey(effectiveType))
+					@switch[effectiveType]();
 				else
 				{
-					request.AddParameter(attr.QueryString, value.ToString().ToLower());
+					request.AddParameter(attr.QueryString, value.ToString().ToLowerInvariant());
 					Console.WriteLine("[WARNING] Type is not strictly supported by @switch");
 				}
 

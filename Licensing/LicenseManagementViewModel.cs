@@ -105,6 +105,13 @@ namespace Bivrost.Licensing
 		}
 
 
+		protected override void OnDeactivate(bool close)
+		{
+			if (close)
+				dialogIsOpen = false;
+			base.OnDeactivate(close);
+		}
+
 		void OpenLicenseServerUnreachable(string license)
 		{
 			WindowContent = new LicenseServerUnreachableViewModel(
@@ -114,7 +121,7 @@ namespace Bivrost.Licensing
 					if (ConfirmUseBasicFeatures())
 						LicenseSetBasicFeatures();
 				},
-				() => LicenseVerify(license)
+				() => OpenLicenseVerify(license)
 			);
 			DialogOpenIfNotOpenedYet();
 		}
@@ -171,20 +178,14 @@ namespace Bivrost.Licensing
 				throw new Exception("Set basic features cannot work with a required license");
 			}
 
-			if (license == null || license.grant == null)
-			{
-				context.LicenseUpdated(null);
-			}
-			else
-			{
-				context.LicenseUpdated(license);
-			}
+			context.LicenseUpdated(license);
 
 			DialogCloseIfOpen();
 		}
 
 
-		private bool inLicenseVerification = false;
+		private static readonly object verificationLock = new object();
+		private static bool inLicenseVerification = false;
 		private readonly LicensingConnector.IContext context;
 
 
@@ -207,6 +208,16 @@ namespace Bivrost.Licensing
 				return;
 			}
 
+			lock (verificationLock)
+			{
+				if (inLicenseVerification)
+				{
+					log.Info("License verification already in progress, ignoring duplicate call.");
+					return;
+				}
+				inLicenseVerification = true;
+			}
+
 			// start license verification in background
 			Task.Factory.StartNew(async () =>
 			{
@@ -214,13 +225,12 @@ namespace Bivrost.Licensing
 
 				try
 				{
-					inLicenseVerification = true;
 					LicenseNinja.License license = await LicenseNinja.Verify(context.ProductCode, newLicense, context.InstallId);
 					log.Info("License verified");
-					if(dialogWasOrIsOpen)
-						context.LicenseVerified(); 
 					Execute.OnUIThread(() =>
 					{
+						if (dialogWasOrIsOpen)
+							context.LicenseVerified();
 						LicenseStore(newLicense, license);
 					});
 				}
@@ -249,7 +259,10 @@ namespace Bivrost.Licensing
 				}
 				finally
 				{
-					inLicenseVerification = false;
+					lock (verificationLock)
+					{
+						inLicenseVerification = false;
+					}
 				}
 			});
 
@@ -324,7 +337,8 @@ namespace Bivrost.Licensing
 			{
 				if(ConfirmUseBasicFeatures())
 				{
-					LicenseSetBasicFeatures();
+					context.LicenseUpdated(null);
+					dialogIsOpen = false;
 					callback(true);
 					return;
 				}

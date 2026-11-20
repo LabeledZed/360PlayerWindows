@@ -168,8 +168,13 @@ namespace PlayerRemote
 				RestRequest request = new RestRequest("events", Method.GET);
 				IRestResponse response = await client.ExecuteTaskAsync(request, cancelToken);
 				apiDebugger(request, response);
+				if (response == null || response.ErrorException != null || string.IsNullOrWhiteSpace(response.Content))
+				{
+					await Task.Delay(500, cancelToken);
+					continue;
+				}
 				var r = JsonConvert.DeserializeObject<List<IncommingEvent>>(response.Content);
-				if (r.Count > 0)
+				if (r != null && r.Count > 0)
 					return r;
 			}
 			return new List<IncommingEvent>();
@@ -183,7 +188,13 @@ namespace PlayerRemote
 				RestRequest request = new RestRequest("events", Method.GET);
 				IRestResponse response = await client.ExecuteTaskAsync(request, cancelToken);
 				apiDebugger(request, response);
-				JsonConvert.DeserializeObject<List<IncommingEvent>>(response.Content).ForEach(eventHandler);
+				if (response == null || response.ErrorException != null || string.IsNullOrWhiteSpace(response.Content))
+				{
+					await Task.Delay(500, cancelToken);
+					continue;
+				}
+				var r = JsonConvert.DeserializeObject<List<IncommingEvent>>(response.Content);
+				r?.ForEach(eventHandler);
 			}
 		}
 		#endregion

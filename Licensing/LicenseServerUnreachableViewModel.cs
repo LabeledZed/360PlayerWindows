@@ -5,6 +5,8 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
+using System.Windows;
+
 namespace Bivrost.Licensing
 {
 	public class LicenseServerUnreachableViewModel : PropertyChangedBase
@@ -26,7 +28,7 @@ namespace Bivrost.Licensing
 		public void Retry() { retryCallback(); }
 
 
-		public bool ClearLicenseVisible { get { return !context.RequireLicense; } }
+		public Visibility ClearLicenseVisible { get { return !context.RequireLicense ? Visibility.Visible : Visibility.Collapsed; } }
 
 	}
 }

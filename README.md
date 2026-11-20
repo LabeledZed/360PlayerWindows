@@ -104,6 +104,31 @@ XBox or compatible gamepad is supported.
 * **analog left** or **analog right**: look around (both sticks works the same)
 
 
+Oculus controller control
+-------------------------
+
+Oculus Touch (including Meta Quest via Quest Link) and Oculus Remote controllers are supported during Oculus VR playback:
+
+**Playback controls (usable with either single controller):**
+* **`A` or `X`** (or **Oculus Remote `Enter`**): play / pause (or open local file picker if no media is loaded)
+* **`B` or `Y`** (or **Menu** / **Oculus Remote `Back`**): open / close the in-VR Local File Picker
+* **Any Grip + `B` or `Y`**: cycle projection mode (`Auto` → `360° Sphere` → `180° Dome (_LR)` → `Fisheye 180°` → `Mesh 180°` → `Cubemap 360°`)
+* **Any Grip + `A` or `X`**: cycle stereoscopy mode (`Auto` → `Side-by-Side (_LR)` → `Top-Bottom (_TB)` → `Mono` → `SBS Reversed` → `TB Reversed`)
+* **Any Joystick Left / Right** (or **Oculus Remote `Left`/`Right`**): skip backwards / forwards by 10 seconds *(works even if UI is open)*
+* **Any Grip + Any Joystick Left / Right**: skip backwards / forwards by 1 minute *(when no UI is open)*
+* **Any Grip + Any Trigger + Any Joystick Left / Right**: skip backwards / forwards by 5 minutes *(when no UI is open)*
+* **Any Joystick Up / Down**: volume up / down
+* **Hold Any Joystick Pressed In (`LThumb` / `RThumb`) for 1.5 seconds**: recenter / reset view to where you are looking
+* **Quick Tap Any Joystick Pressed In (`LThumb` / `RThumb`)**: add / remove the currently playing local file from Favorites
+
+**In-VR Local File Picker controls (separate Favorites, Locations, Recents & Drives menus):**
+* **Any Joystick Up / Down** (or **Oculus Remote `Up`/`Down`**): move selection up / down
+* **`A`, `X`, Index Trigger**, or **Oculus Remote `Enter`**: open folder / menu or play selected file
+* **Any Joystick Pressed In (`LThumb` / `RThumb`)**: add / remove the highlighted file or folder from Favorites
+* **Any Joystick Left / Right**: skip backwards / forwards by 10 seconds
+* **`B`, `Y`, `Menu`**, or **Oculus Remote `Back`**: close file picker
+
+
 3dconnexion SpaceMouse/SpaceNavigator
 -------------------------------------
 

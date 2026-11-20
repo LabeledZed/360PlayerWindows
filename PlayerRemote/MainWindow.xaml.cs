@@ -5,6 +5,7 @@ using System.Windows;
 using System.Windows.Controls;
 using RestSharp;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Threading;
 
 namespace PlayerRemote
@@ -128,7 +129,16 @@ namespace PlayerRemote
 			Button btn = new Button();
 			btn.Content = "change URL";
 			btn.Click += (s, e) =>
-				api = new ControlAPI(url.Text, APIDebugger);
+			{
+				try
+				{
+					api = new ControlAPI(url.Text, APIDebugger);
+				}
+				catch (UriFormatException ex)
+				{
+					log.Text = "Invalid API URL: " + ex.Message;
+				}
+			};
 			Panel.Children.Add(btn);
 			AddSeparator();
 
@@ -154,7 +164,7 @@ namespace PlayerRemote
 
 			AddTitle("GET /v1/seek");
 			var t = AddInput("t (GET)");
-			AddButton("run", async () => await api.Seek(float.Parse(t.Text)));
+			AddButton("run", async () => await api.Seek(float.Parse(t.Text, CultureInfo.InvariantCulture)));
 			AddSeparator();
 
 			AddTitle("GET /v1/stop-and-reset");
@@ -179,9 +189,12 @@ namespace PlayerRemote
 			Button btnrunonce = null;
 			Button btnrununtilcanceled = null;
 			btncancel=AddButton("cancel", async () => { 
-				if(cts != null)
+				if (cts != null)
+				{
 					cts.Cancel();
-				cts = null;
+					cts.Dispose();
+					cts = null;
+				}
 				btncancel.IsEnabled = false;
 				btnrunonce.IsEnabled = btnrununtilcanceled.IsEnabled = true;
 				return true;  
@@ -190,35 +203,53 @@ namespace PlayerRemote
 
 			btnrunonce = AddButton("run once", async () => {
 				if (cts != null)
+				{
 					cts.Cancel(false);
-				cts = new CancellationTokenSource();
+					cts.Dispose();
+				}
+				var localCts = new CancellationTokenSource();
+				cts = localCts;
 				btncancel.IsEnabled = true;
 				btnrunonce.IsEnabled = btnrununtilcanceled.IsEnabled = false;
 				try {
-					var events = await api.GetEventsOnce(cts.Token);
+					var events = await api.GetEventsOnce(localCts.Token);
 					return events;
 				} finally {
-					btncancel.IsEnabled = false;
-					btnrunonce.IsEnabled = btnrununtilcanceled.IsEnabled = true;
+					if (cts == localCts)
+					{
+						cts.Dispose();
+						cts = null;
+						btncancel.IsEnabled = false;
+						btnrunonce.IsEnabled = btnrununtilcanceled.IsEnabled = true;
+					}
 				}
 			});
 
 			btnrununtilcanceled=AddButton("run until canceled", async () => {
 				if (cts != null)
+				{
 					cts.Cancel(false);
-				cts = new CancellationTokenSource();
+					cts.Dispose();
+				}
+				var localCts = new CancellationTokenSource();
+				cts = localCts;
 				btncancel.IsEnabled = true;
 				btnrunonce.IsEnabled = btnrununtilcanceled.IsEnabled = false;
 				try {
 					await api.GetEvents(ie => {
 						log.Dispatcher.BeginInvoke(new Action(
 							() => log.Text += string.Format("EVENT: {0}={1}", ie.name, ie.arg)));
-					}, cts.Token);
+					}, localCts.Token);
 					return true;
 				}
 				finally {
-					btncancel.IsEnabled = false;
-					btnrunonce.IsEnabled = btnrununtilcanceled.IsEnabled = true;
+					if (cts == localCts)
+					{
+						cts.Dispose();
+						cts = null;
+						btncancel.IsEnabled = false;
+						btnrunonce.IsEnabled = btnrununtilcanceled.IsEnabled = true;
+					}
 				}
 			});
 		}

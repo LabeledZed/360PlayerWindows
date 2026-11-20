@@ -83,9 +83,11 @@ namespace Bivrost.Licensing
 							foreach (string opt in grant.Split(new char[] { ',' }))
 							{
 								string[] keyval = opt.Split(new char[] { '=' }, 2);
-								string key = keyval[0];
-								string val = keyval.Length > 1 ? keyval[1] : null;
-								_grantAsDictionary.Add(key.Trim().ToLowerInvariant(), val?.Trim()?.ToLowerInvariant());
+								string key = keyval[0].Trim().ToLowerInvariant();
+								if (string.IsNullOrEmpty(key))
+									continue;
+								string val = keyval.Length > 1 ? keyval[1]?.Trim()?.ToLowerInvariant() : null;
+								_grantAsDictionary[key] = val;
 							}
 						}
 					}
@@ -114,22 +116,23 @@ namespace Bivrost.Licensing
 			try
 			{
 				using (var client = new HttpClient())
+				using (var content = new FormUrlEncodedContent(new[] {
+					new KeyValuePair<string, string>("token", token),
+					new KeyValuePair<string, string>("product", product),
+					new KeyValuePair<string, string>("hash", hash),
+					new KeyValuePair<string, string>("udid", udid),
+					new KeyValuePair<string, string>("lang", lang),
+					new KeyValuePair<string, string>("version", "2")
+				}))
 				{
 					client.BaseAddress = new Uri(licenseURI);
-					var result = client.PostAsync(
-						licenseURI,
-						new FormUrlEncodedContent(new[] {
-							 new KeyValuePair<string, string>("token", token),
-							 new KeyValuePair<string, string>("product", product),
-							 new KeyValuePair<string, string>("hash", hash),
-							 new KeyValuePair<string, string>("udid", udid),
-							 new KeyValuePair<string, string>("lang", lang),
-							 new KeyValuePair<string, string>("version", "2")
-						})).Result;
-					www = await result.Content.ReadAsStringAsync();
-					if (!result.IsSuccessStatusCode)
-						throw new NoLicenseServerConnectionException("bad status code");
-					log.Info($"Received {www}");
+					using (var result = await client.PostAsync(licenseURI, content).ConfigureAwait(false))
+					{
+						www = await result.Content.ReadAsStringAsync().ConfigureAwait(false);
+						if (!result.IsSuccessStatusCode)
+							throw new NoLicenseServerConnectionException("bad status code");
+						log.Info($"Received {www}");
+					}
 				}
 			}
 			catch(Exception e)
@@ -155,10 +158,10 @@ namespace Bivrost.Licensing
 
 						// version 2, with grant object:
 						string grant = null;
-						if (www.Split(new char[] { '|' }).Length == 4)
+						if (split.Length == 4)
 						{
 							version = 2;
-							grant = www.Split(new char[] { '|' }, 4)[3];
+							grant = split[3];
 							hashSource = $"{time}{token}{product}{grant}{key}";
 						}
 
@@ -198,11 +201,13 @@ namespace Bivrost.Licensing
 		/// <param name="str">string to be hashed</param>
 		static string SHA1(string dataString)
 		{
-			SHA1 hash = SHA1CryptoServiceProvider.Create();
-			byte[] plainTextBytes = Encoding.ASCII.GetBytes(dataString);
-			byte[] hashBytes = hash.ComputeHash(plainTextBytes);
-			string localChecksum = BitConverter.ToString(hashBytes).Replace("-", "").ToLowerInvariant();
-			return localChecksum;
+			using (SHA1 hash = System.Security.Cryptography.SHA1.Create())
+			{
+				byte[] plainTextBytes = Encoding.UTF8.GetBytes(dataString);
+				byte[] hashBytes = hash.ComputeHash(plainTextBytes);
+				string localChecksum = BitConverter.ToString(hashBytes).Replace("-", "").ToLowerInvariant();
+				return localChecksum;
+			}
 		}
 
 

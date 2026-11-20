@@ -76,9 +76,10 @@ namespace _3DconnexionDriver
         /// </summary>
         public bool IsDisposed
         {
-            get;
-            private set;
+            get { return _isDisposed; }
+            private set { _isDisposed = value; }
         }
+        private volatile bool _isDisposed;
 
         /// <summary>
         /// The name of the app using this device
@@ -147,7 +148,8 @@ namespace _3DconnexionDriver
 			set
 			{
 				_uiMode = value ? SiApp.SI_UI_ALL_CONTROLS : SiApp.SI_UI_NO_CONTROLS; 
-				SiApp.SiSetUiMode(_deviceHandle, _uiMode);
+				if (IsAvailable)
+					SiApp.SiSetUiMode(_deviceHandle, _uiMode);
 			}
 		}
 
@@ -180,8 +182,8 @@ namespace _3DconnexionDriver
                 return; //Init already done.
 
             var v = SiApp.SiInitialize();
-            if (v == SiApp.SpwRetVal.SPW_DLL_LOAD_ERROR)
-                throw new _3DxException("Unable to load SiApp DLL");
+            if (v != SiApp.SpwRetVal.SPW_NO_ERROR)
+                throw new _3DxException("Unable to initialize SiApp DLL: " + v);
 
             SiApp.SiOpenData o = default(SiApp.SiOpenData);
             SiApp.SiOpenWinInit(ref o, windowHandle);
@@ -212,6 +214,8 @@ namespace _3DconnexionDriver
 		{
 			if (this.IsDisposed)
 				throw new ObjectDisposedException("");
+			if (!IsAvailable)
+				return;
 
 			SiApp.SiSyncSendQuery(_deviceHandle);
 			for(uint it = 1; it<=NumButtons; it++)
@@ -220,6 +224,8 @@ namespace _3DconnexionDriver
 
 		public void Beep(string tone)
 		{
+			if (!IsAvailable)
+				return;
 			var retVal = SiApp.SiBeep(_deviceHandle, tone);
 		}
 
@@ -231,6 +237,7 @@ namespace _3DconnexionDriver
             if (_deviceHandle != IntPtr.Zero)
             {
                 SiApp.SiClose(_deviceHandle);
+                SiApp.SiTerminate();
                 _deviceHandle = IntPtr.Zero;
             }
         }
@@ -243,7 +250,7 @@ namespace _3DconnexionDriver
         /// <param name="lParam"></param>
         public void ProcessWindowMessage(int msg, IntPtr wParam, IntPtr lParam)
         {
-            if (this.IsDisposed) //We don't throw an Exception in the Message Loop, just return
+            if (this.IsDisposed || !IsAvailable) //We don't throw an Exception in the Message Loop, just return
                 return;
 
             SiApp.SiGetEventData evd = default(SiApp.SiGetEventData);
@@ -278,14 +285,11 @@ namespace _3DconnexionDriver
 					case SiApp.SiEventType.SI_BUTTON_RELEASE_EVENT:
 						lock (eventBuffer)
 						{
-							eventBuffer[SiApp.SiEventType.SI_BUTTON_RELEASE_EVENT] = ButtonEventArgs.FromKeyCode((int)edata.spwData.bData.last, true);
+							eventBuffer[SiApp.SiEventType.SI_BUTTON_RELEASE_EVENT] = ButtonEventArgs.FromKeyCode((int)edata.spwData.bData.last, false);
 							Monitor.Pulse(eventBuffer);
 						}
 						break;
 					default:
-						lock(eventBuffer) {
-							//Console.WriteLine("event type: " + edata.type);
-						}
 						break;
                 }
             }
@@ -293,26 +297,30 @@ namespace _3DconnexionDriver
 
         protected virtual void OnZeroPoint()
         {
-            if (ZeroPoint != null)
-                ZeroPoint(this, EventArgs.Empty);
+            var handler = ZeroPoint;
+            if (handler != null)
+                handler(this, EventArgs.Empty);
         }
 
         protected virtual void OnMotion(MotionEventArgs args)
         {
-            if (Motion != null)
-                Motion(this, args);
+            var handler = Motion;
+            if (handler != null)
+                handler(this, args);
         }
 
 		protected virtual void OnButtonPress(ButtonEventArgs args)
 		{
-			if (ButtonPressed != null)
-				ButtonPressed(this, args);
+			var handler = ButtonPressed;
+			if (handler != null)
+				handler(this, args);
 		}
 
 		protected virtual void OnButtonRelease(ButtonEventArgs args)
 		{
-			if (ButtonReleased != null)
-				ButtonReleased(this, args);
+			var handler = ButtonReleased;
+			if (handler != null)
+				handler(this, args);
 		}
 
 		//protected virtual void OnDeviceChange(DeviceChangeEventArgs args)
@@ -327,11 +335,18 @@ namespace _3DconnexionDriver
         {
             if (!this.IsDisposed)
             {
+                this.IsDisposed = true;
                 CloseDevice();
                 ZeroPoint = null;
                 Motion = null;
+                ButtonPressed = null;
+                ButtonReleased = null;
+                lock (eventBuffer)
+                {
+                    Monitor.PulseAll(eventBuffer);
+                }
+                GC.SuppressFinalize(this);
             }
-            this.IsDisposed = true;
         }
 
         #endregion
@@ -340,25 +355,30 @@ namespace _3DconnexionDriver
         {
             while (!this.IsDisposed)
             {
+                KeyValuePair<SiApp.SiEventType, EventArgs>[] pending;
                 lock (eventBuffer)
                 {
-                    while (eventBuffer.Count == 0)
+                    while (eventBuffer.Count == 0 && !this.IsDisposed)
                         Monitor.Wait(eventBuffer);
-                    foreach (var c in eventBuffer)
-                    {
-                        switch (c.Key)
-                        {
-                            case SiApp.SiEventType.SI_MOTION_EVENT:
-                                OnMotion(c.Value as MotionEventArgs); break;
-							case SiApp.SiEventType.SI_BUTTON_PRESS_EVENT:
-								OnButtonPress(c.Value as ButtonEventArgs); break;
-							case SiApp.SiEventType.SI_BUTTON_RELEASE_EVENT:
-								OnButtonRelease(c.Value as ButtonEventArgs); break;
-							case SiApp.SiEventType.SI_ZERO_EVENT:
-                                OnZeroPoint(); break;
-                        }
-                    }
+                    if (this.IsDisposed)
+                        break;
+                    pending = eventBuffer.ToArray();
                     eventBuffer.Clear();
+                }
+
+                foreach (var c in pending)
+                {
+                    switch (c.Key)
+                    {
+                        case SiApp.SiEventType.SI_MOTION_EVENT:
+                            OnMotion(c.Value as MotionEventArgs); break;
+						case SiApp.SiEventType.SI_BUTTON_PRESS_EVENT:
+							OnButtonPress(c.Value as ButtonEventArgs); break;
+						case SiApp.SiEventType.SI_BUTTON_RELEASE_EVENT:
+							OnButtonRelease(c.Value as ButtonEventArgs); break;
+						case SiApp.SiEventType.SI_ZERO_EVENT:
+                            OnZeroPoint(); break;
+                    }
                 }
                 Thread.Sleep(50);
             }

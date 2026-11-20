@@ -21,7 +21,7 @@ namespace OculusWrap
 		{
 			if(ovr == null)
 				throw new ArgumentNullException("ovr");
-			if(session == null)
+			if(session == IntPtr.Zero)
 				throw new ArgumentNullException("session");
 			if(mirrorTexturePtr == IntPtr.Zero)
 				throw new ArgumentNullException("mirrorTexturePtr");

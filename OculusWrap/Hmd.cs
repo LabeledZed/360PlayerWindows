@@ -267,10 +267,24 @@ namespace OculusWrap
 		/// <see cref="OVRTypes.ControllerType"/>
 		public OculusWrap.OVRTypes.InputState GetInputState(OVRTypes.ControllerType controllerTypeMask)
 		{
-			OVRTypes.InputState inputState = new OVRTypes.InputState();
-			OVR.GetInputState(Session, controllerTypeMask, ref inputState);
-
+			OVRTypes.InputState inputState;
+			TryGetInputState(controllerTypeMask, out inputState);
 			return inputState;
+		}
+
+		/// <summary>
+		/// Returns the most recent input state for controllers, without positional tracking info,
+		/// along with the underlying OVR result status.
+		/// </summary>
+		public OVRTypes.Result TryGetInputState(OVRTypes.ControllerType controllerTypeMask, out OVRTypes.InputState inputState)
+		{
+			inputState = new OVRTypes.InputState
+			{
+				IndexTrigger = new float[2],
+				HandTrigger = new float[2],
+				Thumbstick = new OVRTypes.Vector2f[2]
+			};
+			return OVR.GetInputState(Session, controllerTypeMask, ref inputState);
 		}
 
 		/// <summary>

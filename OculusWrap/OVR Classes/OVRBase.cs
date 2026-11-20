@@ -1,4 +1,5 @@
 ﻿using System;
+using System.IO;
 using ovrBool = System.Byte;
 using ovrSession = System.IntPtr;
 using ovrTextureSwapChain = System.IntPtr;
@@ -70,6 +71,69 @@ namespace OculusWrap
 		/// Loads the Oculus runtime dll into memory.
 		/// </summary>
 		protected abstract void LoadLibrary();
+
+		/// <summary>
+		/// Resolves a candidate path for the Oculus runtime DLL by checking the current directory,
+		/// Oculus runtime installation paths, and PATH environment entries.
+		/// Returns the original dllName if no explicit path is found so Win32 LoadLibrary can still
+		/// perform its standard system search.
+		/// </summary>
+		protected static string ResolveOculusDllPath(string dllName)
+		{
+			if (File.Exists(dllName))
+				return dllName;
+
+			string oculusBase = Environment.GetEnvironmentVariable("OculusBase");
+			if (!string.IsNullOrWhiteSpace(oculusBase))
+			{
+				try
+				{
+					string candidate = Path.Combine(oculusBase.Trim('"'), "Support", "oculus-runtime", dllName);
+					if (File.Exists(candidate))
+						return candidate;
+				}
+				catch (ArgumentException) { }
+			}
+
+			string[] defaultRuntimeDirs = new[]
+			{
+				Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Oculus", "Support", "oculus-runtime"),
+				Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Oculus", "Support", "oculus-runtime")
+			};
+
+			foreach (string dir in defaultRuntimeDirs)
+			{
+				if (string.IsNullOrWhiteSpace(dir))
+					continue;
+				try
+				{
+					string candidate = Path.Combine(dir, dllName);
+					if (File.Exists(candidate))
+						return candidate;
+				}
+				catch (ArgumentException) { }
+			}
+
+			string pathEnv = Environment.GetEnvironmentVariable("Path");
+			if (!string.IsNullOrEmpty(pathEnv))
+			{
+				foreach (string rawEntry in pathEnv.Split(Path.PathSeparator))
+				{
+					string entry = rawEntry?.Trim().Trim('"');
+					if (string.IsNullOrEmpty(entry))
+						continue;
+					try
+					{
+						string candidate = Path.Combine(entry, dllName);
+						if (File.Exists(candidate))
+							return candidate;
+					}
+					catch (ArgumentException) { }
+				}
+			}
+
+			return dllName;
+		}
 
 		/// <summary>
 		/// Unloads the Oculus runtime library from memory.

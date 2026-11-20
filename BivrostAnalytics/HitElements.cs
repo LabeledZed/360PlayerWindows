@@ -314,7 +314,7 @@ namespace BivrostAnalytics
 			/// Example usage: sn=facebook
 			/// </summary>
 			[ProtocolVariableAttribute(QueryString = "sn", ByteLimit = 50, Required = true)]
-			public Int64? SocialNetwork { get; set; }
+			public string SocialNetwork { get; set; }
 
 			/// <summary>
 			/// Specifies the social interaction action. For example on Google Plus when a user clicks the +1 button, the social action is 'plus'.
@@ -324,7 +324,7 @@ namespace BivrostAnalytics
 			/// Example usage: sa=like
 			/// </summary>
 			[ProtocolVariableAttribute(QueryString = "sa", ByteLimit = 50, Required = true)]
-			public Int64? SocialAction { get; set; }
+			public string SocialAction { get; set; }
 
 			/// <summary>
 			/// Specifies the target of a social interaction. This value is typically a URL but can be any text.
@@ -334,7 +334,7 @@ namespace BivrostAnalytics
 			/// Example usage: st=http%3A%2F%2Ffoo.com
 			/// </summary>
 			[ProtocolVariableAttribute(QueryString = "st", ByteLimit = 2048, Required = true)]
-			public Int64? SocialActionTarget { get; set; }
+			public string SocialActionTarget { get; set; }
 
 		}
 
@@ -345,14 +345,14 @@ namespace BivrostAnalytics
 			/// Example usage: utc=category
 			/// </summary>
 			[ProtocolVariableAttribute(QueryString = "utc", ByteLimit = 150, Required = true)]
-			public Int64? UserTimingCategory { get; set; }
+			public string UserTimingCategory { get; set; }
 
 			/// <summary>
 			/// Example value: lookup
 			/// Example usage: utv=lookup
 			/// </summary>
 			[ProtocolVariableAttribute(QueryString = "utv", ByteLimit = 500, Required = true)]
-			public Int64? UserTimingVariableName { get; set; }
+			public string UserTimingVariableName { get; set; }
 
 			/// <summary>
 			/// Specifies the user timing value. The value is in milliseconds.
