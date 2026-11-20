@@ -81,6 +81,7 @@ namespace Bivrost.AnalyticsForVR
 			if (history.Empty)
 			{
 				log.Info("Nothing got recorded (no headset)? Discarding session.");
+				history = null;
 				return;
 			}
 
@@ -103,6 +104,7 @@ namespace Bivrost.AnalyticsForVR
 			if(result.contentType != ServiceResult.ContentType.video)
 			{
 				log.Info("Only video files are supported in AnalyticsForVR");
+				history = null;
 				return;
 			}
             history = new LookHistory(10, duration);

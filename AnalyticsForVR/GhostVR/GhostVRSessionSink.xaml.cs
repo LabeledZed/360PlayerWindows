@@ -44,10 +44,13 @@ namespace Bivrost.AnalyticsForVR
 		}
 
 
+		private bool _isClosed = false;
+
 		protected SendStatistics(Session session, GhostVRConnector ghostVRConnector)
 		{
 			logger = ghostVRConnector.logger;
 			InitializeComponent();
+			Closed += (s, e) => _isClosed = true;
 			close.Click += (s, e) => Close();
 			cancel.Click += (s, e) => Close();
 			uiMode = UIMode.loading;
@@ -58,19 +61,20 @@ namespace Bivrost.AnalyticsForVR
 		{
 			Execute.OnUIThread(() => 
 			{
-				browser.LoadCompleted += (s, e) => uiMode = UIMode.form;
-				browser.Navigate(followUpUrl);
+				if (_isClosed) return;
 				ScriptingHelper helper = new ScriptingHelper();
-				//browser.ContextMenu = false;
-				browser.ObjectForScripting = helper;
 				helper.OnCanceled += Helper_OnCanceled;
 				helper.OnCompleted += Helper_OnCompleted;
+				browser.ObjectForScripting = helper;
+				browser.LoadCompleted += (s, e) => uiMode = UIMode.form;
+				browser.Navigate(followUpUrl);
 			});
 		}
 
 
 		private void SessionSendFailure(string obj)
 		{
+			if (_isClosed) return;
 			uiMode = UIMode.failure;
 		}
 		
@@ -81,8 +85,9 @@ namespace Bivrost.AnalyticsForVR
 			{
 				var ss = new SendStatistics(session, ghostVRConnector);
 				// fix: when main window is closed, but another window is still active, app would not turn off without this
-				if (ShellViewModel.Instance.shellView.IsActive)	
-					ss.Owner = ShellViewModel.Instance.shellView;
+				var owner = ShellViewModel.Instance?.shellView;
+				if (owner != null && owner.IsLoaded)	
+					ss.Owner = owner;
 				ss.ShowDialog();
 			});
 		}

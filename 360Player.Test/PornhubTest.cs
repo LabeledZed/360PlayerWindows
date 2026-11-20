@@ -47,22 +47,22 @@ namespace Bivrost.Bivrost360Player.Test
 			Assert.IsTrue(result.videoStreams.Count > 0, "no video streams");
 			Assert.IsFalse(result.videoStreams.Exists(vs => vs.url == null), "some url contains nulls");
 			Assert.IsTrue(result.videoStreams.Exists(vs => vs.url.StartsWith("http://cdn")), "no urls starting with cdn");
-			Assert.AreEqual(MediaDecoder.ProjectionMode.Dome, result.projection);
-			Assert.AreEqual(MediaDecoder.VideoMode.SideBySide, result.stereoscopy);
+			Assert.AreEqual(ProjectionMode.Dome, result.projection);
+			Assert.AreEqual(VideoMode.SideBySide, result.stereoscopy);
 		}
 
 		[TestMethod]
 		public void ParsesTaB()
 		{
 			var result = parser.Parse("http://www.pornhub.com/view_video.php?viewkey=705949422");
-			Assert.AreEqual(MediaDecoder.VideoMode.TopBottomReversed, result.stereoscopy);
+			Assert.AreEqual(VideoMode.TopBottomReversed, result.stereoscopy);
 		}
 
 		[TestMethod]
 		public void ParsesEquirectangular360()
 		{
 			var result = parser.Parse("http://www.pornhub.com/view_video.php?viewkey=705949422");
-			Assert.AreEqual(MediaDecoder.ProjectionMode.Sphere, result.projection);
+			Assert.AreEqual(ProjectionMode.Sphere, result.projection);
 		}
 
 		[TestMethod]

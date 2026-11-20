@@ -7,10 +7,12 @@ namespace Bivrost.Log
 	/// <summary>
 	/// Writing to a text file
 	/// </summary>
-	public class TextFileLogListener : LogListener
+	public class TextFileLogListener : LogListener, IDisposable
 	{
 		private FileStream fp;
 		private UTF8Encoding encoding;
+		private readonly object writeLock = new object();
+		private bool disposed = false;
 
 		public string LogFile { get; protected set; }
 
@@ -22,10 +24,16 @@ namespace Bivrost.Log
 #if DEBUG
 				version = "DEBUG";
 #else
-				version = "v" + System.Reflection.Assembly.GetEntryAssembly().GetName().Version.ToString();
+			{
+				var asm = System.Reflection.Assembly.GetEntryAssembly() ?? System.Reflection.Assembly.GetExecutingAssembly();
+				version = "v" + asm.GetName().Version.ToString();
+			}
 #endif
 
-			LogFile = logDirectory + string.Format("{2}-{0}-{1}.txt", version, now, logPrefix);
+			if (!string.IsNullOrWhiteSpace(logDirectory) && !Directory.Exists(logDirectory))
+				Directory.CreateDirectory(logDirectory);
+
+			LogFile = Path.Combine(logDirectory ?? "", string.Format("{2}-{0}-{1}.txt", version, now, logPrefix));
 
 			LoggerManager.log.Info("Log file: " + LogFile);
 			fp = new FileStream(LogFile, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.Read);
@@ -35,14 +43,27 @@ namespace Bivrost.Log
 
 		public void Write(LoggerManager.LogElement entry)
 		{
+			string message = (entry.Message ?? "").Trim().Replace("\n", "\n\t");
 			byte[] buf = encoding.GetBytes(
 				$"[{entry.Type} {entry.Tag}] {entry.Time.ToString("yyyy-MM-dd HH:mm:ss")} at {entry.Path}\r\n" +
-				$"\t{entry.Message.Trim().Replace("\n", "\n\t")}\r\n\r\n"
+				$"\t{message}\r\n\r\n"
 			);
-			lock (LogFile)
+			lock (writeLock)
 			{
+				if (disposed || fp == null) return;
 				fp.Write(buf, 0, buf.Length);
 				fp.Flush();
+			}
+		}
+
+		public void Dispose()
+		{
+			lock (writeLock)
+			{
+				if (disposed) return;
+				disposed = true;
+				fp?.Dispose();
+				fp = null;
 			}
 		}
 

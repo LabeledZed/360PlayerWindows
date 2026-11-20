@@ -8,7 +8,7 @@
     <AppDesignerFolder>Properties</AppDesignerFolder>
     <RootNamespace>PlayerUI.Test</RootNamespace>
     <AssemblyName>PlayerUI.Test</AssemblyName>
-    <TargetFrameworkVersion>v4.5</TargetFrameworkVersion>
+    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
     <FileAlignment>512</FileAlignment>
     <ProjectTypeGuids>{3AC096D0-A1C2-E12C-1390-A8335801FDAB};{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}</ProjectTypeGuids>
     <VisualStudioVersion Condition="'$(VisualStudioVersion)' == ''">10.0</VisualStudioVersion>
@@ -91,6 +91,10 @@
     <CodeAnalysisRuleSet>MinimumRecommendedRules.ruleset</CodeAnalysisRuleSet>
   </PropertyGroup>
   <ItemGroup>
+    <Reference Include="SharpDX, Version=2.6.3.0, Culture=neutral, PublicKeyToken=b4dcf0f35e5521f1, processorArchitecture=MSIL">
+      <SpecificVersion>False</SpecificVersion>
+      <HintPath>$(SharpDXPackageBinDir)\SharpDX.dll</HintPath>
+    </Reference>
     <Reference Include="System" />
   </ItemGroup>
   <Choose>
@@ -108,6 +112,7 @@
     </Otherwise>
   </Choose>
   <ItemGroup>
+    <Compile Include="BugFixesAndOculusControllerTests.cs" />
     <Compile Include="HTTPTest.cs" />
     <Compile Include="BivrostProtocolTest.cs" />
     <Compile Include="LocalFileTest.cs" />
@@ -122,6 +127,14 @@
     <ProjectReference Include="..\360Player\360Player.csproj">
       <Project>{e14fbc2b-b29d-4428-8052-52292eb22c1d}</Project>
       <Name>360Player</Name>
+    </ProjectReference>
+    <ProjectReference Include="..\3Dconnexion-driver-master\3DconnexionDriver.csproj">
+      <Project>{9b78c331-7940-45c7-aaf9-e98270462bd4}</Project>
+      <Name>3DconnexionDriver</Name>
+    </ProjectReference>
+    <ProjectReference Include="..\OculusWrap\OculusWrap.csproj">
+      <Project>{737a81a8-553c-49a9-8f17-5adf691a56b2}</Project>
+      <Name>OculusWrap</Name>
     </ProjectReference>
   </ItemGroup>
   <ItemGroup>
@@ -147,6 +160,7 @@
   </Choose>
   <Import Project="$(VSToolsPath)\TeamTest\Microsoft.TestTools.targets" Condition="Exists('$(VSToolsPath)\TeamTest\Microsoft.TestTools.targets')" />
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+  <Import Project="..\packages\SharpDX.2.6.3\build\SharpDX.targets" Condition="Exists('..\packages\SharpDX.2.6.3\build\SharpDX.targets')" />
   <!-- To modify your build process, add your task inside one of the targets below and uncomment it. 
        Other similar extension points exist, see Microsoft.Common.targets.
   <Target Name="BeforeBuild">

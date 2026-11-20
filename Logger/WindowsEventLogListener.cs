@@ -33,9 +33,9 @@ namespace Bivrost.Log
 		/// <param name="logname"></param>
 		public WindowsEventLogListener(string appname, string logname)
 		{
+			sSource = appname;
 			if (!EventLog.SourceExists(sSource))
 				EventLog.CreateEventSource(sSource, logname);
-			sSource = appname;
 		}
 
 

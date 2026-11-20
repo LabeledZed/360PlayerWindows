@@ -355,11 +355,14 @@ namespace ChanibaL
         /// </param>
         public void SwitchStateExternalImmidiate(State nextState)
         {
-            if (CurrentlyExecuting)
-                LogWarning(this + " used external switch from inside of a state (use SwitchState if this is not a bug)");
-            IsPushedState = false;
-            _SwitchState(nextState);
-            Update(0f);
+            lock (CurrentlyExecutingSyncRoot)
+            {
+                if (CurrentlyExecuting)
+                    LogWarning(this + " used external switch from inside of a state (use SwitchState if this is not a bug)");
+                IsPushedState = false;
+                _SwitchState(nextState);
+                Update(0f);
+            }
         }
 
 
@@ -382,17 +385,21 @@ namespace ChanibaL
 
         public virtual void SwitchStateWithoutExitStateDoNotUseUnlessDesperate(State replaceWithState, bool immidiate)
         {
-            FramesInState = 0;
-            TimeInState = 0;
-            ExitState = false;
-            EnterState = true;
-            forceNextChange = null;
-            nextState = null;
-            CurrentState = null;
-            _SwitchState(replaceWithState);
+            lock (CurrentlyExecutingSyncRoot)
+            {
+                FramesInState = 0;
+                TimeInState = 0;
+                ExitState = false;
+                EnterState = true;
+                forceNextChange = null;
+                nextState = null;
+                CurrentState = replaceWithState;
+                IsPushedState = false;
+                Ticks++;
 
-            if (immidiate)
-                Update(0);
+                if (immidiate)
+                    Update(0);
+            }
         }
 
 
@@ -423,41 +430,47 @@ namespace ChanibaL
         /// </param>
         public void Update(float deltaTime)
         {
-			if (CurrentlyExecuting)
-				throw new Exception("Cannot execute Update while Update is still running");
 			lock (CurrentlyExecutingSyncRoot)
 			{
+				if (CurrentlyExecuting)
+					throw new Exception("Cannot execute Update while Update is still running");
+
 				watchdogRunsThisFrame = 0;
 				CurrentlyExecuting = true;
-				nextState = forceNextChange;    // null if none
-
-				DeltaTime = deltaTime;
-				RunState();
-				EnterState = false;
-
-				if (Ended && !ignoreEndUpdate)
-					LogWarning(this + " ended, but still updating");
-
-				while (nextState != null)
+				try
 				{
-					CurrentState = nextState;
-					nextState = null;
-					Ticks++;
+					nextState = forceNextChange;    // null if none
+					forceNextChange = null;
 
-					EnterState = true;
-					ExitState = false;
-					deltaTime = 0f;
-					TimeInState = 0;
+					DeltaTime = deltaTime;
 					RunState();
-
 					EnterState = false;
+
+					if (Ended && !ignoreEndUpdate)
+						LogWarning(this + " ended, but still updating");
+
+					while (nextState != null)
+					{
+						CurrentState = nextState;
+						nextState = null;
+						Ticks++;
+
+						EnterState = true;
+						ExitState = false;
+						DeltaTime = deltaTime = 0f;
+						TimeInState = 0;
+						RunState();
+
+						EnterState = false;
+					}
+
+					FramesInState++;
+					TimeInState += deltaTime;
 				}
-
-				CurrentlyExecuting = false;
-				forceNextChange = null;
-
-				FramesInState++;
-				TimeInState += deltaTime;
+				finally
+				{
+					CurrentlyExecuting = false;
+				}
 			}
         }
 
@@ -553,7 +566,9 @@ namespace ChanibaL
         public void PopState()
         {
             LogDebug(this + " pop state: " + StateName + " -> " + DelegateToString(stack.Peek()));
-            _SwitchState(stack.Pop());
+            var popped = stack.Pop();
+            IsPushedState = stack.Count > 0;
+            _SwitchState(popped);
         }
 
 

@@ -92,11 +92,14 @@ namespace Bivrost.Log
 
 		internal static Logger log = new Logger("Log Window");
 
+		private Action<System.Collections.Concurrent.ConcurrentDictionary<string, object>> publishedListUpdatedHandler;
+
 
 		public LogWindow()
 		{
 			Published = new ObservableCollectionWrapper(LoggerManager.published, Dispatcher);
-			LoggerManager.PublishedListUpdated += d => Published.NotifyCollectionChanged();
+			publishedListUpdatedHandler = d => Published.NotifyCollectionChanged();
+			LoggerManager.PublishedListUpdated += publishedListUpdatedHandler;
 
 			Initialized += (s, e) =>
 			{
@@ -106,6 +109,7 @@ namespace Bivrost.Log
 
 			Closing += (s, e) =>
 			{
+				LoggerManager.PublishedListUpdated -= publishedListUpdatedHandler;
 				LoggerManager.UnregisterListener(this);
 				Instance = null;
 			};
@@ -192,7 +196,13 @@ namespace Bivrost.Log
 			{
 				if (_openTxtCommand == null)
 				{
-					Func<TextFileLogListener> getTextFileLogListener = () => LoggerManager.listeners.FirstOrDefault(lw => lw is TextFileLogListener) as TextFileLogListener;
+					Func<TextFileLogListener> getTextFileLogListener = () =>
+					{
+						lock (LoggerManager.listeners)
+						{
+							return LoggerManager.listeners.FirstOrDefault(lw => lw is TextFileLogListener) as TextFileLogListener;
+						}
+					};
 
 					_openTxtCommand = new RelayCommand(
 						(p) =>

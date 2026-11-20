@@ -38,8 +38,8 @@ namespace Bivrost.MOTD
 				Height = height;
 			};
 			InitializeComponent();
-			browser.Navigate(url);
 			browser.ObjectForScripting = scriptingHelper;
+			browser.Navigate(url);
 		}
 
 
@@ -50,8 +50,9 @@ namespace Bivrost.MOTD
 				var popup = new MOTDPopup(title, url, width, height, scriptingHelper);
 
 				// fix: when main window is closed, but another window is still active, app would not turn off without this
-				if (ShellViewModel.Instance.shellView.IsActive)
-					popup.Owner = ShellViewModel.Instance.shellView;
+				var owner = ShellViewModel.Instance?.shellView;
+				if (owner != null && owner.IsLoaded)
+					popup.Owner = owner;
 				popup.Show();
 			});
 		}
@@ -80,8 +81,9 @@ namespace Bivrost.MOTD
 					helper.OnUpdateRequested += requestUpdate;
 
 				// fix: when main window is closed, but another window is still active, app would not turn off without this
-				if (ShellViewModel.Instance.shellView.IsActive)
-					popup.Owner = ShellViewModel.Instance.shellView;
+				var owner = ShellViewModel.Instance?.shellView;
+				if (owner != null && owner.IsLoaded)
+					popup.Owner = owner;
 				popup.Show();
 			});
 		}

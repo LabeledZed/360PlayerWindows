@@ -84,10 +84,22 @@ namespace Bivrost.Log
 		{
 			while (true)
 			{
-                LogElement e = logElementQueue.Take();				
-                lock(listeners)
-				    foreach (var l in listeners)
-					    l.Write(e);
+                LogElement e = logElementQueue.Take();
+                LogListener[] snapshot;
+                lock (listeners)
+                    snapshot = new List<LogListener>(listeners).ToArray();
+
+                foreach (var l in snapshot)
+                {
+                    try
+                    {
+                        l.Write(e);
+                    }
+                    catch (Exception)
+                    {
+                        // Do not allow a single failing log listener to crash the logging thread
+                    }
+                }
 			}
 		}
 
@@ -96,25 +108,43 @@ namespace Bivrost.Log
 
 
 		private static Thread thread;
+		private static readonly object threadLock = new object();
 
 
 		public static void RegisterListener(LogListener lw)
 		{
-			lock(listeners)
-				listeners.Add(lw);
+			if (lw == null) return;
 
-			if (thread == null)
+			LogElement[] historySnapshot;
+			lock (history)
 			{
-				thread = new Thread(new ThreadStart(WriteLogThread))
-				{
-					IsBackground = true,
-					Name = "log listener thread"
-				};
-				thread.Start();
+				historySnapshot = history.ToArray();
 			}
 
-			foreach (var entry in history)
-				lw.Write(entry);
+			foreach (var entry in historySnapshot)
+			{
+				try
+				{
+					lw.Write(entry);
+				}
+				catch (Exception) { }
+			}
+
+			lock (listeners)
+				listeners.Add(lw);
+
+			lock (threadLock)
+			{
+				if (thread == null)
+				{
+					thread = new Thread(new ThreadStart(WriteLogThread))
+					{
+						IsBackground = true,
+						Name = "log listener thread"
+					};
+					thread.Start();
+				}
+			}
 
 			log.Info("Registered log writer: " + lw);
 		}
@@ -221,7 +251,7 @@ namespace Bivrost.Log
 			[CallerLineNumber] int sourceLineNumber = 0
 		)
 		{
-			WriteLogEntry(LogType.error, msg, PathUtil(sourceFilePath, sourceLineNumber, memberName), OBSOLETE_NO_TAG);
+			WriteLogEntry(LogType.fatal, msg, PathUtil(sourceFilePath, sourceLineNumber, memberName), OBSOLETE_NO_TAG);
 			// System.Windows.MessageBox.Show(msg, "Fatal error");
 		}
 
@@ -245,7 +275,8 @@ namespace Bivrost.Log
 			[CallerLineNumber] int sourceLineNumber = 0
 		)
 		{
-			Fatal((additionalMsg + "\n").Trim() + e, memberName, sourceFilePath, sourceLineNumber);
+			string prefix = string.IsNullOrWhiteSpace(additionalMsg) ? "" : additionalMsg.Trim() + "\n";
+			Fatal(prefix + e, memberName, sourceFilePath, sourceLineNumber);
 		}
 		#endregion
 

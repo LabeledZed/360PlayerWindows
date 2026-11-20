@@ -55,8 +55,8 @@ namespace Bivrost.Bivrost360Player.Test
 			var result = parser.Parse("https://littlstar.com/videos/0fde0e55");
 			Assert.IsTrue(result.videoStreams.Count > 0, "no video streams");
 			Assert.IsFalse(result.videoStreams.Exists(vs => vs.url == null), "some url contains nulls");
-			Assert.AreEqual(MediaDecoder.ProjectionMode.Sphere, result.projection);
-			Assert.AreEqual(MediaDecoder.VideoMode.Mono, result.stereoscopy);
+			Assert.AreEqual(ProjectionMode.Sphere, result.projection);
+			Assert.AreEqual(VideoMode.Mono, result.stereoscopy);
 		}
 	}
 }

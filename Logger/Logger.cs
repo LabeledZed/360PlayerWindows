@@ -97,7 +97,7 @@ namespace Bivrost.Log
 			[CallerLineNumber] int sourceLineNumber = 0
 		)
 		{
-			LoggerManager.WriteLogEntry(LogType.error, msg, LoggerManager.PathUtil(sourceFilePath, sourceLineNumber, memberName), Tag);
+			LoggerManager.WriteLogEntry(LogType.fatal, msg, LoggerManager.PathUtil(sourceFilePath, sourceLineNumber, memberName), Tag);
 			// System.Windows.MessageBox.Show(msg, "Fatal error");
 		}
 
@@ -120,7 +120,8 @@ namespace Bivrost.Log
 			[CallerLineNumber] int sourceLineNumber = 0
 		)
 		{
-			Fatal((additionalMsg + "\n").Trim() + e, memberName, sourceFilePath, sourceLineNumber);
+			string prefix = string.IsNullOrWhiteSpace(additionalMsg) ? "" : additionalMsg.Trim() + "\n";
+			Fatal(prefix + e, memberName, sourceFilePath, sourceLineNumber);
 		}
 
 		internal void Publish(string subkey, object val)

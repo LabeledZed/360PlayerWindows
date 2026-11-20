@@ -16,27 +16,30 @@ namespace Bivrost.AnalyticsForVR
 
             public static byte Angle01to063(double angle01)
             {
-                int v = (int)Math.Round(64 * angle01);
-                while (v < 0)
-                    v += 64;
-                while (v >= 64)
-                    v -= 64;
+                if (double.IsNaN(angle01) || double.IsInfinity(angle01))
+                    return 0;
+                double wrapped = angle01 - Math.Floor(angle01);
+                int v = (int)Math.Round(64.0 * wrapped) % 64;
+                if (v < 0) v += 64;
+                return (byte)v;
+            }
+
+            public static byte Clamp01to063(double angle01)
+            {
+                if (double.IsNaN(angle01) || double.IsInfinity(angle01))
+                    return 32;
+                int v = (int)Math.Round(64.0 * angle01);
+                if (v < 0) v = 0;
+                if (v > 63) v = 63;
                 return (byte)v;
             }
 
 			internal HeadPosition(double yaw01, double pitch01, byte fov = 0)
 			{
 				yaw = Angle01to063(yaw01);
-				pitch = Angle01to063(pitch01);
+				pitch = Clamp01to063(pitch01);
 				this.fov = fov;
 			}
-
-			//public HeadPosition(char yawBase64, char pitchBase64, byte fov = 0)
-			//{
-			//    yaw = (byte)BASE64.IndexOf(yawBase64);
-			//    pitch = (byte)BASE64.IndexOf(pitchBase64);
-			//    this.fov = fov;
-			//}
 
 			public bool IsEmpty => yaw == 0 && pitch == 0 && fov == 0;
 
@@ -44,8 +47,8 @@ namespace Bivrost.AnalyticsForVR
 			readonly internal byte pitch;
 			readonly internal byte fov;
 
-            public double Yaw => (yaw * 2F * Math.PI) - Math.PI;
-            public double Pitch => pitch * Math.PI - 0.5f * Math.PI;
+            public double Yaw => ((yaw / 64.0) * 2.0 * Math.PI) - Math.PI;
+            public double Pitch => ((pitch / 64.0) * Math.PI) - (0.5 * Math.PI);
 
 		}
 
@@ -58,10 +61,13 @@ namespace Bivrost.AnalyticsForVR
 		{
 			get
 			{
-				foreach (var point in data)
-					if (!point.IsEmpty)
-						return false;
-				return true;
+				lock (data)
+				{
+					foreach (var point in data)
+						if (!point.IsEmpty)
+							return false;
+					return true;
+				}
 			}
 		}
 
@@ -72,17 +78,25 @@ namespace Bivrost.AnalyticsForVR
 		/// <param name="mediaLength">How long is this medium</param>
 		public LookHistory(int precision, double mediaLength)
 		{
-            this.precision = precision;
-            int count = (int)Math.Ceiling(mediaLength * precision);
+            this.precision = precision > 0 ? precision : 1;
+            int count = 0;
+            if (!double.IsNaN(mediaLength) && !double.IsInfinity(mediaLength) && mediaLength > 0)
+            {
+                double rawCount = Math.Ceiling(mediaLength * this.precision);
+                if (rawCount > 0 && rawCount < 1024 * 1024)
+                    count = (int)rawCount;
+                else if (rawCount >= 1024 * 1024)
+                    count = 1024 * 1024;
+            }
             data = new List<HeadPosition>(count);
-            //data.AddRange(Enumerable.Repeat<HeadPosition>(HeadPosition.Empty, count));
         }
 
         public void TrackData(float t, SharpDX.Quaternion quaternion, byte fov)
 		{
-            //double rad2deg = 180 / Math.PI;
+            if (float.IsNaN(t) || float.IsInfinity(t) || t < 0f)
+                return;
+
 			var v = GraphicTools.QuaternionToYawPitch(quaternion);
-            // angle from quaternion should be always [-4PI, 4PI], no need for while loop
             double yaw = ( Math.PI * 9 + v.X ) % (2 * Math.PI) - Math.PI; // => [-PI, +PI]
             double pitch = -v.Y;    // => [-PI/2, PI/2]
             double yaw01 = yaw / (2 * Math.PI) + 0.5;
@@ -98,7 +112,14 @@ namespace Bivrost.AnalyticsForVR
 
         void TrackData(float t, double yaw01, double pitch01, byte fov)
 		{
-            int idx = (int)Math.Floor(t * precision);
+            if (float.IsNaN(t) || float.IsInfinity(t) || t < 0f)
+                return;
+
+            double rawIdx = Math.Floor(t * precision);
+            if (rawIdx < 0 || rawIdx > int.MaxValue - 1)
+                return;
+
+            int idx = (int)rawIdx;
             lock (data)
             {
                 // add new element at end (and return)
@@ -109,18 +130,13 @@ namespace Bivrost.AnalyticsForVR
                 }
                 
                 // no space for element - need to resize
-                else if (idx >= data.Count)
+                else if (idx > data.Count)
                 {
-					if (idx > data.Capacity)
+					if (idx >= data.Capacity)
 						data.Capacity = idx + 1;
-					data.AddRange(Enumerable.Repeat<HeadPosition>(new HeadPosition(), data.Capacity - data.Count));
+					data.AddRange(Enumerable.Repeat<HeadPosition>(new HeadPosition(), (idx + 1) - data.Count));
                 }
 
-				// finally add the element
-				//if (data[idx] != null)
-				//{
-				//    // TODO: integrate?
-				//}
 				data[idx] = new HeadPosition(yaw01, pitch01, fov);
             }
         }

@@ -34,12 +34,22 @@ namespace Bivrost.AnalyticsForVR
 
 		public void UseSession(Session session)
 		{
-			var dest = $"{DestinationDirectory}/session-{session.time_start.ToString("yyyy-MM-ddTHHmmss")}.360Session";
-			File.WriteAllText(
-				dest,
-				session.ToJson()
-			);
-			log.Info($"saved a session to {dest}");
+			try
+			{
+				string dir = DestinationDirectory;
+				if (!Directory.Exists(dir))
+					Directory.CreateDirectory(dir);
+				var dest = Path.Combine(dir, $"session-{session.time_start.ToString("yyyy-MM-ddTHHmmss")}.360Session");
+				File.WriteAllText(
+					dest,
+					session.ToJson()
+				);
+				log.Info($"saved a session to {dest}");
+			}
+			catch (System.Exception ex)
+			{
+				log.Error(ex, "Failed to save locally stored session");
+			}
 		}
 	}
 }

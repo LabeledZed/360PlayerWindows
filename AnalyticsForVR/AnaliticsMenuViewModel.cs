@@ -49,7 +49,12 @@ namespace Bivrost.AnalyticsForVR
 		public bool LocalSessionsEnabled
 		{
 			get { return Logic.Instance.settings.LocallyStoredSessions; }
-			set { Logic.Instance.settings.LocallyStoredSessions = value; }
+			set
+			{
+				Logic.Instance.settings.LocallyStoredSessions = value;
+				Logic.Instance.settings.Save();
+				NotifyOfPropertyChange(nameof(LocalSessionsEnabled));
+			}
 		}
 
 		void LocalSessionsSetDirectory()
@@ -81,7 +86,12 @@ namespace Bivrost.AnalyticsForVR
 		public bool GhostVREnabled
 		{
 			get { return Logic.Instance.settings.GhostVREnabled; }
-			set { Logic.Instance.settings.GhostVREnabled = value; }
+			set
+			{
+				Logic.Instance.settings.GhostVREnabled = value;
+				Logic.Instance.settings.Save();
+				NotifyOfPropertyChange(nameof(GhostVREnabled));
+			}
 		}
 
 		public string GhostVRLabel

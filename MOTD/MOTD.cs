@@ -149,7 +149,7 @@ namespace Bivrost.MOTD
 			public override object ReadJson(JsonReader reader, Type objectType, object existingValue, JsonSerializer serializer)
 			{
 				JObject jo = JObject.Load(reader);
-				switch (jo["type"].Value<string>())
+				switch (jo["type"]?.Value<string>())
 				{
 					case nameof(ApiResponse.Type.none):
 						return jo.ToObject<ApiResponseNone>(serializer);
@@ -186,6 +186,42 @@ namespace Bivrost.MOTD
 		}
 
 
+		private void HandleApiResponse(IRestResponse response)
+		{
+			try
+			{
+				if (response == null)
+				{
+					logger.Error("MOTD server returned null response.");
+					return;
+				}
+				if (response.ErrorException != null)
+				{
+					logger.Error(response.ErrorException.Message);
+					return;
+				}
+				int statusCode = (int)response.StatusCode;
+				if (statusCode < 200 || statusCode >= 300)
+				{
+					logger.Error($"MOTD server returned HTTP {statusCode} ({response.StatusDescription}).");
+					return;
+				}
+				string json = response.Content;
+				if (string.IsNullOrWhiteSpace(json))
+				{
+					logger.Error("MOTD server returned empty response.");
+					return;
+				}
+
+				var responseObject = ParseResponse(json);
+				responseObject?.Execute(app);
+			}
+			catch (Exception ex)
+			{
+				logger.Error(ex, "Failed to process MOTD server response");
+			}
+		}
+
 		public void RequestMOTD()
 		{
 			logger.Info($"Requesting MOTD for {app.Product} version={app.Version??"(development)"} id={app.InstallId}");
@@ -196,19 +232,7 @@ namespace Bivrost.MOTD
 			request.AddParameter("product", app.Product, ParameterType.GetOrPost);
 			request.AddParameter("version", app.Version, ParameterType.GetOrPost);
 
-			client.ExecuteAsync(request, (response, request_) =>
-			{
-				if (response.ErrorException != null)
-				{
-					logger.Error(response.ErrorException.Message);
-					return;
-				}
-
-				string json = response.Content;
-				var responseObject = ParseResponse(json);
-
-				responseObject.Execute(app);
-			});
+			client.ExecuteAsync(request, (response, request_) => HandleApiResponse(response));
 		}
 
 
@@ -225,19 +249,7 @@ namespace Bivrost.MOTD
 			request.AddParameter("version-previous", prevVersion, ParameterType.GetOrPost);
 			request.AddParameter("version-current", currentVersion, ParameterType.GetOrPost);
 
-			client.ExecuteAsync(request, (response, request_) =>
-			{
-				if (response.ErrorException != null)
-				{
-					logger.Error(response.ErrorException.Message);
-					return;
-				}
-
-				string json = response.Content;
-				var responseObject = ParseResponse(json);
-
-				responseObject.Execute(app);
-			});
+			client.ExecuteAsync(request, (response, request_) => HandleApiResponse(response));
 		}
 
 

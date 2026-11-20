@@ -473,7 +473,7 @@ namespace Bivrost.AnalyticsForVR
 			if(sm.EnterState)
 			{
 				Logic.Notify("GhostVR verification failed.");
-				cancelTrigger = sm.StateSwitcherValidOnlyInThisState(StateDisconnect);
+				disconnectTrigger = sm.StateSwitcherValidOnlyInThisState(StateDisconnect);
 			}
 			if(sm.TimeInState > 10)
 				sm.SwitchState(StateConnected);
