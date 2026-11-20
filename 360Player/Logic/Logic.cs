@@ -33,7 +33,7 @@ namespace Bivrost.Bivrost360Player
 		Five=4
 	}
 
-	public class Logic
+	public class Logic : IDisposable
 	{
 
 		public const string productCode = "360player-windows";
@@ -59,9 +59,7 @@ namespace Bivrost.Bivrost360Player
 
 		protected Logic(string localDataDirectory)
 		{
-			//File.WriteAllText("D:\\abcd.txt", "qweqwe123");
-			//File.WriteAllText(Environment.GetFolderPath(Environment.SpecialFolder.Desktop) + "\\" + "aaaaa.wtf", "asbvlajhbvaldbaldsbalsd");
-			Logic.LocalDataDirectory = localDataDirectory + "BIVROST\\360Player\\";
+			Logic.LocalDataDirectory = Path.Combine(localDataDirectory ?? "", "BIVROST", "360Player") + Path.DirectorySeparatorChar;
 			if(!Directory.Exists(Logic.LocalDataDirectory))
 			{
 				try
@@ -72,10 +70,6 @@ namespace Bivrost.Bivrost360Player
 					MessageBox.Show("exc: " + exc.Message + "\npath: " + Logic.LocalDataDirectory);
 				}
 			}
-			
-
-
-			Instance = this;
 
 			// bind buttons in settings window
 			settings = new Settings();
@@ -89,13 +83,16 @@ namespace Bivrost.Bivrost360Player
 			var OsVersionString = Environment.OSVersion.VersionString;
 			var x64 = Environment.Is64BitOperatingSystem ? "x64" : "x86";
 			var cpu = Environment.ProcessorCount;
+			var appAsmName = (Assembly.GetEntryAssembly() ?? Assembly.GetExecutingAssembly()).GetName();
 
 			stats = new Tracker()
 			{
 				TrackingId = "UA-68212464-1",
 				DeviceId = settings.InstallId.ToString(),
-				UserAgentString = $"BivrostAnalytics/1.0 ({OsPlatform}; {OsVersion}; {OsVersionString}; {x64}; CPU-Cores:{cpu}) {Assembly.GetEntryAssembly().GetName().Name}/{Assembly.GetEntryAssembly().GetName().Version}"
+				UserAgentString = $"BivrostAnalytics/1.0 ({OsPlatform}; {OsVersion}; {OsVersionString}; {x64}; CPU-Cores:{cpu}) {appAsmName.Name}/{appAsmName.Version}"
 			};
+
+			Instance = this;
 
 			//==============
 
@@ -117,18 +114,24 @@ namespace Bivrost.Bivrost360Player
 		public GhostVRConnector ghostVRConnector;
 #endif
 		public LocallyStoredSessionSink locallyStoredSessions;
+		private bool _disposed = false;
 
-		~Logic()
-		{         
-            lookListener?.Dispose();
+		public void Dispose()
+		{
+			if (_disposed) return;
+			_disposed = true;
+			lookListener?.Dispose();
+			lookListener = null;
 		}
 
 		
 
 		public void ReloadPlayer()
 		{
-			System.Diagnostics.Process.Start(System.Reflection.Assembly.GetEntryAssembly().Location);
-			Application.Current.Shutdown();
+			BivrostBootstrapper.ReleaseSingleInstanceMutex();
+			var asm = Assembly.GetEntryAssembly() ?? Assembly.GetExecutingAssembly();
+			System.Diagnostics.Process.Start(asm.Location);
+			Application.Current?.Shutdown();
 		}
 
 		public void CheckForUpdate()
@@ -153,8 +156,9 @@ namespace Bivrost.Bivrost360Player
 			{
 				settings.InstallId = Guid.NewGuid();
 				settings.Save();
+				BivrostBootstrapper.ReleaseSingleInstanceMutex();
 				System.Windows.Forms.Application.Restart();
-				System.Windows.Application.Current.Shutdown();
+				System.Windows.Application.Current?.Shutdown();
 			}
 		}
 
@@ -167,8 +171,9 @@ namespace Bivrost.Bivrost360Player
 				try
 				{
 					System.IO.File.Delete(settings.SettingsFile);
+					BivrostBootstrapper.ReleaseSingleInstanceMutex();
 					System.Windows.Forms.Application.Restart();
-					System.Windows.Application.Current.Shutdown();
+					System.Windows.Application.Current?.Shutdown();
 				}
 				catch (Exception exc) { logger.Error(exc, "Error resetting configuration"); }
 			}
@@ -178,11 +183,11 @@ namespace Bivrost.Bivrost360Player
 
         internal void ValidateSettings()
         {
-			foreach (SettingVerificationAttribute attr in typeof(Settings).GetCustomAttributes(false))
+			foreach (SettingVerificationAttribute attr in typeof(Settings).GetCustomAttributes(typeof(SettingVerificationAttribute), false))
 			{
 				attr.Normalize();
 			}
-			foreach (SettingVerificationAttribute attr in typeof(Settings).GetCustomAttributes(false))
+			foreach (SettingVerificationAttribute attr in typeof(Settings).GetCustomAttributes(typeof(SettingVerificationAttribute), false))
 			{
 				if (!attr.Valid) logger.Error($"Settings not valid? {attr.GetType().Name}");
 			}
@@ -234,7 +239,14 @@ namespace Bivrost.Bivrost360Player
 		)
 		{
 			notificationLogger.Info($"{msg}, {linkLabel}->{uri}", memberName, sourceFilePath, sourceLineNumber);
-			var notification = new NotificationViewModel(msg, () => System.Diagnostics.Process.Start(uri), linkLabel);
+			var notification = new NotificationViewModel(msg, () =>
+			{
+				if (Uri.TryCreate(uri, UriKind.Absolute, out Uri parsed) &&
+					(parsed.Scheme == Uri.UriSchemeHttp || parsed.Scheme == Uri.UriSchemeHttps))
+				{
+					try { System.Diagnostics.Process.Start(parsed.AbsoluteUri); } catch (Exception) { }
+				}
+			}, linkLabel);
 			Caliburn.Micro.Execute.OnUIThreadAsync(
 				() => ShellViewModel.Instance?.NotificationCenter?.PushNotification(notification)
 			);

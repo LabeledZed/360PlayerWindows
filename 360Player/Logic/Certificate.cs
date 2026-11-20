@@ -173,11 +173,11 @@ internal class Certificate
                 1, // CERT_STORE_ADD_NEW
                 out storeCertContext));
 
-            NativeMethods.CertSetCertificateContextProperty(
+            Check(NativeMethods.CertSetCertificateContextProperty(
                 storeCertContext,
                 2, // CERT_KEY_PROV_INFO_PROP_ID
                 0,
-                ref kpi);
+                ref kpi));
 
             if (password != null)
             {

@@ -22,10 +22,25 @@ namespace Bivrost.Bivrost360Player
 
 		public static void CreateClickOnceShortcut()
 		{
-			byte[] token = System.Reflection.Assembly.GetExecutingAssembly().GetName().GetPublicKeyToken();
-			byte[] key = System.Reflection.Assembly.GetExecutingAssembly().GetName().GetPublicKey();
-            token = (new SHA1CryptoServiceProvider()).ComputeHash(new byte[0]).Take(8).ToArray();
-            File.WriteAllText(Logic.LocalDataDirectory + Path.DirectorySeparatorChar + "publictoken", ByteArrayToString(token));
+			try
+			{
+				byte[] token = System.Reflection.Assembly.GetExecutingAssembly().GetName().GetPublicKeyToken();
+				if (token == null || token.Length == 0)
+				{
+					byte[] key = System.Reflection.Assembly.GetExecutingAssembly().GetName().GetPublicKey();
+					using (var sha1 = SHA1.Create())
+					{
+						token = sha1.ComputeHash(key ?? new byte[0]).Take(8).ToArray();
+					}
+				}
+				if (!string.IsNullOrWhiteSpace(Logic.LocalDataDirectory))
+				{
+					if (!Directory.Exists(Logic.LocalDataDirectory))
+						Directory.CreateDirectory(Logic.LocalDataDirectory);
+					File.WriteAllText(Path.Combine(Logic.LocalDataDirectory, "publictoken"), ByteArrayToString(token));
+				}
+			}
+			catch (Exception) { }
 		}
 
 		public static string ByteArrayToString(byte[] ba)

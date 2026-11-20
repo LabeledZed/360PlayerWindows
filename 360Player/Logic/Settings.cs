@@ -21,6 +21,7 @@ namespace Bivrost.Bivrost360Player
 
 
 #region settings management
+		private readonly object _fileLock = new object();
 		private string _settingsFile = "";
 		[JsonIgnore]
 		public string SettingsFile
@@ -33,9 +34,7 @@ namespace Bivrost.Bivrost360Player
 		{
 			if (string.IsNullOrWhiteSpace(configFile))
 			{
-				configFile = Logic.LocalDataDirectory + "settings.conf"; //Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData) + "\\BivrostPlayer\\settings.conf";
-				//if (!Directory.Exists(Path.GetDirectoryName(configFile)))
-				//	Directory.CreateDirectory(Path.GetDirectoryName(configFile));
+				configFile = Path.Combine(Logic.LocalDataDirectory, "settings.conf");
 			}
 			SettingsFile = configFile;
 			Load();
@@ -53,19 +52,47 @@ namespace Bivrost.Bivrost360Player
 
 		public void Load()
 		{
-			if (File.Exists(SettingsFile)) {
-				JsonConvert.PopulateObject(File.ReadAllText(SettingsFile), this);
-			}
-			else
+			lock (_fileLock)
 			{
-				Save();
+				if (File.Exists(SettingsFile))
+				{
+					try
+					{
+						JsonConvert.PopulateObject(File.ReadAllText(SettingsFile), this);
+					}
+					catch (Exception ex)
+					{
+						log.Error(ex, "Failed to load settings file, using defaults");
+					}
+				}
+				else
+				{
+					Save();
+				}
 			}
 		}
 
 		public void Save()
 		{
-			File.WriteAllText(SettingsFile, JsonConvert.SerializeObject(this));
-			Console.WriteLine(JsonConvert.SerializeObject(this));
+			lock (_fileLock)
+			{
+				try
+				{
+					string dir = Path.GetDirectoryName(SettingsFile);
+					if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+						Directory.CreateDirectory(dir);
+					string serialized = JsonConvert.SerializeObject(this);
+					string tmpFile = SettingsFile + ".tmp";
+					File.WriteAllText(tmpFile, serialized);
+					File.Copy(tmpFile, SettingsFile, true);
+					File.Delete(tmpFile);
+					Console.WriteLine(serialized);
+				}
+				catch (Exception ex)
+				{
+					log.Error(ex, "Failed to save settings file");
+				}
+			}
 		}
 #endregion
 
@@ -85,6 +112,9 @@ namespace Bivrost.Bivrost360Player
 		[SettingsProperty("Default VR headset mode", ConfigItemType.Enum)]
 		public HeadsetMode HeadsetUsage { get; set; } = HeadsetMode.Disable;
 
+		[SettingsProperty("Audio output device", ConfigItemType.AudioDevice)]
+		public string AudioOutputDevice { get; set; } = Tools.AudioDeviceManager.AutoModeId;
+
 		[SettingsProperty("OSVR screen number", ConfigItemType.Enum)]
 		public ScreenSelection OSVRScreen { get; set; } = ScreenSelection.Autodetect;
 
@@ -103,16 +133,10 @@ namespace Bivrost.Bivrost360Player
 		public bool UserHeadsetTracking { get; set; } = false;
 
 
-#if FEATURE_GHOST_VR
+#if FEATURE_GHOSTVR
 		//GhostVR and locally stored sessions
 		[SettingsAdvancedProperty("Enable GhostVR analytics", ConfigItemType.Bool, requiredFeatures = FeaturesEnum.ghostVR)]
-		public bool GhostVREnabled
-		{
-			get { return _ghostVREnabled && Features.GhostVR; }
-			set { _ghostVREnabled = value; }
-		}
-		[JsonIgnore]
-		bool _ghostVREnabled = true;
+		public bool GhostVREnabled { get; set; } = true;
 
 
 		[SettingsAdvancedProperty("GhostVR license token", ConfigItemType.String, requiredFeatures = FeaturesEnum.ghostVR)]
@@ -125,13 +149,7 @@ namespace Bivrost.Bivrost360Player
 
 
 		[SettingsAdvancedProperty("Local video analytics sessions enabled", ConfigItemType.Bool, requiredFeatures = FeaturesEnum.locallyStoredSessions)]
-		public bool LocallyStoredSessions
-		{
-			get { return _locallyStoredSessions && Features.LocallyStoredSessions; }
-			set { _locallyStoredSessions = value; }
-		}
-		[JsonIgnore]
-		bool _locallyStoredSessions = false;
+		public bool LocallyStoredSessions { get; set; } = false;
 
 		[SettingsAdvancedProperty("Local video analytics sessions directory", ConfigItemType.Path, requiredFeatures = FeaturesEnum.locallyStoredSessions)]
 		public string LocallyStoredSessionsDirectory { get; set; } = null;
@@ -158,7 +176,7 @@ namespace Bivrost.Bivrost360Player
         [SettingsAdvancedProperty("Space Navigator: invert pitch", ConfigItemType.Bool)]
         public bool SpaceNavigatorInvertPitch { get; set; } = false;
         [SettingsAdvancedProperty("Space Navigator: shortcut keys and push to zoom active", ConfigItemType.Bool)]
-        public bool SpaceNavigatorKeysAndZoomActive { get; internal set; } = true;
+        public bool SpaceNavigatorKeysAndZoomActive { get; set; } = true;
     }
 
 

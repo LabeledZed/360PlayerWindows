@@ -53,8 +53,12 @@ namespace Bivrost.Bivrost360Player.InputDevices
 
         public void Dispose()
         {
-            connex.Motion -= Connex_Motion;
-            connex.ZeroPoint -= Connex_ZeroPoint;
+            if (connex != null)
+            {
+                connex.Motion -= Connex_Motion;
+                connex.ZeroPoint -= Connex_ZeroPoint;
+                connex.ButtonPressed -= Connex_ButtonPressed;
+            }
         }
 
 

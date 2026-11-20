@@ -31,7 +31,7 @@ namespace Bivrost.Bivrost360Player
 					return false;
 				}
 
-				if (info.UpdateAvailable)
+				if (info != null && info.UpdateAvailable)
 					return true;
 			}
 			return false;
@@ -42,26 +42,22 @@ namespace Bivrost.Bivrost360Player
 			if (ApplicationDeployment.IsNetworkDeployed)
 			{
 				ApplicationDeployment ad = ApplicationDeployment.CurrentDeployment;
-				if (info.UpdateAvailable)
+				if (info != null && info.UpdateAvailable)
 				{
 					try
 					{
 						ad.Update();
-						if (OnUpdateSuccess != null)
-						{
-							OnUpdateSuccess();
-							OnUpdateFail = null;
-							OnUpdateSuccess = null;
-						}
+						OnUpdateSuccess?.Invoke();
 					}
-					catch (DeploymentDownloadException dde)
+					catch (Exception ex)
 					{
-						LoggerManager.Error(dde, "Update deployement failed");
-						if (OnUpdateFail != null) {
-							OnUpdateFail();
-							OnUpdateFail = null;
-							OnUpdateSuccess = null;
-                        }						
+						LoggerManager.Error(ex, "Update deployment failed");
+						OnUpdateFail?.Invoke();
+					}
+					finally
+					{
+						OnUpdateFail = null;
+						OnUpdateSuccess = null;
 					}
 				}
 			}

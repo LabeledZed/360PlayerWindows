@@ -66,6 +66,8 @@ namespace Bivrost.Bivrost360Player
 					fe |= FeaturesEnum.requireLicense;
 				if (RemoteEnabled)
 					fe |= FeaturesEnum.remote;
+				if (Commercial)
+					fe |= FeaturesEnum.commercialUse;
 				#pragma warning restore
 				return fe;
 			}
@@ -141,32 +143,46 @@ namespace Bivrost.Bivrost360Player
 
 		internal static void SetGrants(Dictionary<string, string> grants)
 		{
+			// Reset all granted features to default before applying new grants
+			GhostVR = false;
+			LocallyStoredSessions = false;
+			RemoteEnabled = false;
+			Commercial = false;
+
+			if (grants == null)
+				return;
+
+			var remainingGrants = new Dictionary<string, string>(grants);
 			foreach (var field in typeof(Features).GetFields())
 			{
-				var fieldval = field.GetValue(null);
 				foreach (var attr in field.GetCustomAttributes(true))
 				{
 					if (attr is FeatureGrantedFromLicenseAttribute)
 					{
 						string name = ((FeatureGrantedFromLicenseAttribute)attr).name;
-						if (grants.ContainsKey(name))
+						if (remainingGrants.ContainsKey(name))
 						{
-							string val = grants[name];
-							if (fieldval is bool)
+							string val = remainingGrants[name];
+							if (field.FieldType == typeof(bool))
 								field.SetValue(null, val == "true" || string.IsNullOrEmpty(val));
-							else if (fieldval is int)
-								field.SetValue(null, int.Parse(val));
-							else if (fieldval is string)
+							else if (field.FieldType == typeof(int))
+							{
+								if (int.TryParse(val, out int parsed))
+									field.SetValue(null, parsed);
+								else
+									log.Error($"Invalid integer grant value '{val}' for key {name}");
+							}
+							else if (field.FieldType == typeof(string))
 								field.SetValue(null, val);
 							else
-								log.Error($"Unsupported feature field type: {field.GetType()} on key {name}");
-							grants.Remove(name);
+								log.Error($"Unsupported feature field type: {field.FieldType} on key {name}");
+							remainingGrants.Remove(name);
 						}
 					}
 				}
 			}
 
-			foreach (var kvp in grants)
+			foreach (var kvp in remainingGrants)
 			{
 				log.Error(kvp.Value != null ? $"Unknown feature granted: {kvp.Key} = {kvp.Value}" : $"Unknown feature granted: {kvp.Key} (no value)");
 			}

@@ -55,6 +55,21 @@ namespace Bivrost.Bivrost360Player.InputDevices
 
 			if (Active)
 			{
+				prevGamepad = gamepad;
+				try
+				{
+					gamepad = xpad.GetState().Gamepad;
+				}
+				catch (SharpDX.SharpDXException)
+				{
+					gamepad = default(Gamepad);
+					prevGamepad = default(Gamepad);
+					LoggerManager.Publish("gamepad", "not connected");
+					vPitch = vPitch.LerpInPlace(0, deltaTime * 4);
+					vYaw = vYaw.LerpInPlace(0, deltaTime * 4);
+					return;
+				}
+
 				LoggerManager.Publish(
 					"gamepad", 
 					string.Format("buttons={6} LT={0:00000} {1:00000} {2:00000} RT={3:00000} {4:00000} {5:00000}",
@@ -63,9 +78,6 @@ namespace Bivrost.Bivrost360Player.InputDevices
 						gamepad.Buttons
 					)
 				);
-
-				prevGamepad = gamepad;
-				gamepad = xpad.GetState().Gamepad;
 
 				if (gamepad.LeftThumbX < -Gamepad.LeftThumbDeadZone)
 					dvYaw = (gamepad.LeftThumbX + Gamepad.LeftThumbDeadZone) / (32768f - Gamepad.LeftThumbDeadZone);
@@ -95,6 +107,8 @@ namespace Bivrost.Bivrost360Player.InputDevices
 			}
 			else
 			{
+				gamepad = default(Gamepad);
+				prevGamepad = default(Gamepad);
 				LoggerManager.Publish("gamepad", "not connected");
 			}
 			

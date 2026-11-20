@@ -27,10 +27,19 @@ namespace Bivrost.Bivrost360Player
 			public static implicit operator RecentsFormat2(RecentsFormat1 rf1)
 			{
 				RecentsFormat2 rf2 = new RecentsFormat2();
+				if (rf1 == null) return rf2;
 				rf2.AddRange(rf1.ConvertAll(uri => 
 				{
 					log.Info("Upgrading recents from v1");
-					string title = Path.GetFileName(uri);
+					string title = null;
+					try
+					{
+						string path = uri;
+						if (Uri.TryCreate(uri, UriKind.Absolute, out Uri parsed) && !parsed.IsFile)
+							path = parsed.AbsolutePath;
+						title = Path.GetFileName(path);
+					}
+					catch (ArgumentException) { }
 					if (string.IsNullOrWhiteSpace(title))
 						title = uri;
 					return new RecentElement() { uri = uri, title = title };
@@ -40,6 +49,7 @@ namespace Bivrost.Bivrost360Player
 		}
 
 
+		static readonly object recentsLock = new object();
 		static RecentsFormat2 recentFiles = null;
 
 
@@ -47,9 +57,12 @@ namespace Bivrost.Bivrost360Player
 		{
 			get
 			{
-				if (recentFiles == null)
-					Load();
-				return recentFiles;
+				lock (recentsLock)
+				{
+					if (recentFiles == null)
+						Load();
+					return recentFiles;
+				}
 			}
 		}
 
@@ -57,10 +70,11 @@ namespace Bivrost.Bivrost360Player
 		{
 			try
 			{
-				string dataFoler = Logic.LocalDataDirectory;//Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData) + "\\BivrostPlayer";
+				string dataFoler = Logic.LocalDataDirectory;
+				if (string.IsNullOrWhiteSpace(dataFoler)) return;
 				if (!Directory.Exists(dataFoler))
 					Directory.CreateDirectory(dataFoler);
-				string recentConfig = dataFoler + "recents";
+				string recentConfig = Path.Combine(dataFoler, "recents");
 				File.WriteAllText(recentConfig, JsonConvert.SerializeObject(recentFiles), Encoding.UTF8);
 			}
 			catch (Exception exc) {
@@ -70,13 +84,17 @@ namespace Bivrost.Bivrost360Player
 
 		static void Load()
 		{
-			Debug.Assert(recentFiles == null);
 			try
 			{
-				string dataFoler = Logic.LocalDataDirectory;//Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData) + "\\BivrostPlayer";
+				string dataFoler = Logic.LocalDataDirectory;
+				if (string.IsNullOrWhiteSpace(dataFoler))
+				{
+					recentFiles = new RecentsFormat2();
+					return;
+				}
 				if (!Directory.Exists(dataFoler))
 					Directory.CreateDirectory(dataFoler);
-				string recentConfig = dataFoler + "recents";
+				string recentConfig = Path.Combine(dataFoler, "recents");
 
 				if (File.Exists(recentConfig))
 				{
@@ -87,7 +105,7 @@ namespace Bivrost.Bivrost360Player
 						recentFiles = JsonConvert.DeserializeObject<RecentsFormat2>(recentsSerialized);
 					}
 					// this probably isn't in the newest format, try the older one
-					catch(JsonSerializationException e)
+					catch(JsonSerializationException)
 					{
 						recentFiles = JsonConvert.DeserializeObject<RecentsFormat1>(recentsSerialized);
 						Save();
@@ -102,20 +120,33 @@ namespace Bivrost.Bivrost360Player
 			catch (Exception exc) {
 				log.Error(exc, "Recents error");
 			}
+			finally
+			{
+				if (recentFiles == null)
+					recentFiles = new RecentsFormat2();
+			}
 		}
 
 		public static void AddRecent(Streaming.ServiceResult result)
 		{
-			// remove duplicate
-			recentFiles.RemoveAll(f => f.uri == result.originalURL);
+			if (result == null || string.IsNullOrWhiteSpace(result.originalURL))
+				return;
 
-			// trim to at most 9 (so 1 can be added)
-			while (recentFiles.Count > 9)
-				recentFiles.RemoveAt(0);
+			lock (recentsLock)
+			{
+				var list = RecentFiles;
 
-			string title = result.title;
-			recentFiles.Insert(0, new RecentsFormat2.RecentElement() { title = title, uri = result.originalURL });
-			Save();
+				// remove duplicate
+				list.RemoveAll(f => f.uri == result.originalURL);
+
+				// trim oldest entries so at most 9 remain (10 after insert)
+				while (list.Count > 9)
+					list.RemoveAt(list.Count - 1);
+
+				string title = result.title;
+				list.Insert(0, new RecentsFormat2.RecentElement() { title = title, uri = result.originalURL });
+				Save();
+			}
 		}
 
 	}

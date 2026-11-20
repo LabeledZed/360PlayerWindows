@@ -16,10 +16,18 @@ namespace Bivrost.Bivrost360Player.InputDevices
         {
             lock (locker)
             {
-                const int maxKey = 255;
+                const int maxKey = 256;
                 state = new BitArray(maxKey, false);
                 EventManager.RegisterClassHandler(typeof(Window), UIElement.KeyDownEvent, new KeyEventHandler(HandleKeyDown));
                 EventManager.RegisterClassHandler(typeof(Window), UIElement.KeyUpEvent, new KeyEventHandler(HandleKeyUp));
+            }
+        }
+
+        public static void ClearAllKeys()
+        {
+            lock (locker)
+            {
+                state.SetAll(false);
             }
         }
 
