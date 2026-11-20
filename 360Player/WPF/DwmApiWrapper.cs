@@ -14,11 +14,11 @@ namespace Bivrost.Bivrost360Player.WPF
 
 		[PreserveSig]
 		[DllImport("dwmapi.dll", EntryPoint = "#101")]
-		public static extern int UpdateWindowShared(IntPtr hWnd, int one, int two, int three, IntPtr hMonitor, IntPtr unknown);
+		public static extern int UpdateWindowShared(IntPtr hWnd, UInt64 uiUpdateId, uint dwFlags, IntPtr hMonitor, IntPtr pRect);
 
 		[PreserveSig]
 		[DllImport("dwmapi.dll", EntryPoint = "#100")]
-		public static extern int GetSharedSurface(IntPtr hWnd, Int64 adapterLuid, uint one, uint two, [In, Out]ref uint pD3DFormat, [Out]out IntPtr pSharedHandle, UInt64 unknown);
+		public static extern int GetSharedSurface(IntPtr hWnd, Int64 adapterLuid, IntPtr hMonitor, uint dwFlags, [In, Out] ref uint pD3DFormat, [Out] out IntPtr pSharedHandle, [In, Out] ref UInt64 puiUpdateId);
 
 		[DllImport("user32.dll", SetLastError = true)]
 		internal static extern IntPtr FindWindow(string lpClassName, string lpWindowName);

@@ -25,41 +25,39 @@ namespace Bivrost.Bivrost360Player
 
 			if (!settings.BrowserPluginQuestionShown)
 			{
-
-
-				Task.Factory.StartNew(() =>
+				Caliburn.Micro.Execute.OnUIThreadAsync(() =>
 				{
-					var result = System.Windows.Forms.MessageBox.Show("Install browser integration extensions?", "Browser addons", System.Windows.Forms.MessageBoxButtons.YesNoCancel);
+					var mainWindow = System.Windows.Application.Current?.MainWindow;
+					var result = mainWindow != null
+						? System.Windows.MessageBox.Show(mainWindow, "Install browser integration extensions?", "Browser addons", System.Windows.MessageBoxButton.YesNoCancel)
+						: System.Windows.MessageBox.Show("Install browser integration extensions?", "Browser addons", System.Windows.MessageBoxButton.YesNoCancel);
 
-					if (result == System.Windows.Forms.DialogResult.Yes)
+					if (result == System.Windows.MessageBoxResult.Yes)
 					{
-
-						try
-						{
-							if (CheckFirefox())
-							{
-								InstallFirefoxPlugin();
-							}
-						}
-						catch (Exception exc) { }
-
-						try
-						{
-							if (CheckChrome())
-							{
-								InstallChromePlugin();
-							}
-						}
-						catch (Exception exc) { }
-
 						settings.BrowserPluginAccepted = true;
 						settings.BrowserPluginQuestionShown = true;
-
 						settings.Save();
 
+						Task.Factory.StartNew(() =>
+						{
+							try
+							{
+								if (CheckFirefox())
+									InstallFirefoxPlugin();
+							}
+							catch (Exception exc) { Bivrost.Log.LoggerManager.Error(exc, "Firefox plugin install failed"); }
+
+							try
+							{
+								if (CheckChrome())
+									InstallChromePlugin();
+							}
+							catch (Exception exc) { Bivrost.Log.LoggerManager.Error(exc, "Chrome plugin install failed"); }
+						});
 					}
-					else if (result == System.Windows.Forms.DialogResult.No)
+					else if (result == System.Windows.MessageBoxResult.No)
 					{
+						settings.BrowserPluginAccepted = false;
 						settings.BrowserPluginQuestionShown = true;
 						settings.Save();
 					}
@@ -71,14 +69,19 @@ namespace Bivrost.Bivrost360Player
 				{
 					if (settings.BrowserPluginAccepted)
 					{
-						if (CheckFirefox())
+						try
 						{
-							InstallFirefoxPlugin();
+							if (CheckFirefox())
+								InstallFirefoxPlugin();
 						}
-						if (CheckChrome())
+						catch (Exception exc) { Bivrost.Log.LoggerManager.Error(exc, "Firefox plugin check/install failed"); }
+
+						try
 						{
-							InstallChromePlugin();
+							if (CheckChrome())
+								InstallChromePlugin();
 						}
+						catch (Exception exc) { Bivrost.Log.LoggerManager.Error(exc, "Chrome plugin check/install failed"); }
 					}
 				});
 			}
@@ -99,31 +102,40 @@ namespace Bivrost.Bivrost360Player
             bool appFound = false;
             appPath = "";
 
-            RegistryKey myApps = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\App Paths");
-			if(myApps == null) myApps = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths");
-			if (myApps != null)
-			{
-				if (myApps.GetSubKeyNames().Contains(appName))
-				{
-					RegistryKey chromeKey = myApps.OpenSubKey(appName);
-					appPath = chromeKey.GetValue("").ToString();
-					appFound = true;
-				}
-				myApps.Close();
-			}
+            using (RegistryKey myApps = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\App Paths"))
+            {
+                if (myApps != null)
+                {
+                    using (RegistryKey appKey = myApps.OpenSubKey(appName))
+                    {
+                        string val = appKey?.GetValue("") as string;
+                        if (!string.IsNullOrEmpty(val))
+                        {
+                            appPath = val;
+                            appFound = true;
+                        }
+                    }
+                }
+            }
 
-            RegistryKey localApps = Registry.LocalMachine.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\App Paths");
-			if(localApps == null) localApps = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths");
-			if (localApps != null)
-			{
-				if (localApps.GetSubKeyNames().Contains(appName))
-				{
-					RegistryKey chromeKey = localApps.OpenSubKey(appName);
-					appPath = chromeKey.GetValue("").ToString();
-					appFound = true;
-				}
-				localApps.Close();
-			}
+            if (!appFound)
+            {
+                using (RegistryKey localApps = Registry.LocalMachine.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\App Paths"))
+                {
+                    if (localApps != null)
+                    {
+                        using (RegistryKey appKey = localApps.OpenSubKey(appName))
+                        {
+                            string val = appKey?.GetValue("") as string;
+                            if (!string.IsNullOrEmpty(val))
+                            {
+                                appPath = val;
+                                appFound = true;
+                            }
+                        }
+                    }
+                }
+            }
 
 			return appFound;
 		}
@@ -131,8 +143,6 @@ namespace Bivrost.Bivrost360Player
         public static void RunBrowser(string appPath)
         {
             ProcessStartInfo proc = new ProcessStartInfo();
-            //proc.UseShellExecute = true;
-            //proc.WorkingDirectory = ;
             proc.FileName = appPath;
 
             Process.Start(proc);
@@ -140,123 +150,77 @@ namespace Bivrost.Bivrost360Player
 
         public static void InstallFirefoxPlugin()
         {
+			string tempDir = null;
 			try
 			{
-				//string ffPlugin = @"https://download.bivrost360.com/ff-plugin/bivrost_360player_connector-1.0-fx-windows.xpi";
 				string ffPlugin = @"https://download.bivrost360.com/ff-plugin/firefox-connector-extension@bivrost360.com.xpi";
 
 				var client = new RestSharp.RestClient(ffPlugin);
 				var request = new RestSharp.RestRequest("");
 				var response = client.Execute(request);
-				if (response.StatusCode == System.Net.HttpStatusCode.OK)
+				if (response.ErrorException == null && response.StatusCode == System.Net.HttpStatusCode.OK && response.RawBytes != null && response.RawBytes.Length > 0)
 				{
-					string pluginDir = Logic.LocalDataDirectory + "ffplugin";
+					string pluginDir = Path.Combine(Logic.LocalDataDirectory, "ffplugin");
+					tempDir = Path.Combine(Logic.LocalDataDirectory, "ffplugin_tmp_" + Guid.NewGuid().ToString("N"));
+					Directory.CreateDirectory(tempDir);
+
+					var destCopy = Path.Combine(tempDir, "extension.xpi");
+					File.WriteAllBytes(destCopy, response.RawBytes);
+					ZipFile.ExtractToDirectory(destCopy, tempDir);
+					File.Delete(destCopy);
 
 					if (Directory.Exists(pluginDir))
 						Directory.Delete(pluginDir, true);
-
-					if (!Directory.Exists(pluginDir))
-						Directory.CreateDirectory(pluginDir);
-
-					var destCopy = pluginDir + "\\" + response.ResponseUri.Segments.Last();
-					File.WriteAllBytes(destCopy, response.RawBytes);
-					ZipFile.ExtractToDirectory(destCopy, pluginDir);
-					File.Delete(destCopy);
+					Directory.Move(tempDir, pluginDir);
+					tempDir = null;
 
 					string extensionID = "firefox-connector-extension@bivrost360.com";
 
-					// 32
+					using (RegistryKey firefoxKey = Registry.CurrentUser.OpenSubKey(@"Software\Mozilla\Firefox", true))
 					{
-						RegistryKey chromeKey = Registry.CurrentUser.OpenSubKey(@"Software\Mozilla\Firefox\", true);
-						if (chromeKey != null)
+						if (firefoxKey != null)
 						{
-							RegistryKey extensionsKey = chromeKey.OpenSubKey(@"Extensions", true);
-							if (extensionsKey == null)
+							using (RegistryKey extensionsKey = firefoxKey.OpenSubKey(@"Extensions", true) ?? firefoxKey.CreateSubKey("Extensions"))
 							{
-								extensionsKey = chromeKey.CreateSubKey("Extensions");
+								extensionsKey?.SetValue(extensionID, pluginDir);
 							}
-							extensionsKey.SetValue(extensionID, pluginDir);
-							
-							extensionsKey.Close();
-							chromeKey.Close();
 						}
 					}
-					
-
-					//var profilesDir = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData) + "\\Mozilla\\Firefox\\Profiles";
-
-						//if (Directory.Exists(profilesDir))
-						//{
-						//	foreach (string profile in Directory.GetDirectories(profilesDir))
-						//	{
-						//		if (profile.EndsWith(".default"))
-						//		{
-						//			var destCopy = profile + "\\extensions\\" + response.ResponseUri.Segments.Last();
-						//			Console.WriteLine("Copy to: " + destCopy);
-						//			//File.Copy(tempFile, destCopy, true);
-						//			File.WriteAllBytes(destCopy, response.RawBytes);
-						//		}
-						//	}
-						//}
 				}
 			}
-			catch (Exception exc) { }
+			catch (Exception exc)
+			{
+				Bivrost.Log.LoggerManager.Error(exc, "InstallFirefoxPlugin failed");
+			}
+			finally
+			{
+				if (tempDir != null && Directory.Exists(tempDir))
+				{
+					try { Directory.Delete(tempDir, true); } catch (Exception) { }
+				}
+			}
         }
 
 
         public static void InstallChromePlugin()
         {
-			//32 - bit Windows: HKEY_CURRENT_USER\Software\Google\Chrome\Extensions\< id > \update_url = https://clients2.google.com/service/update2/crx
-			//64 - bit Windows: HKEY_CURRENT_USER\Software\Wow6432Node\Google\Chrome\Extensions\< id > \update_url = https://clients2.google.com/service/update2/crx
-
             try
 			{
-				// 32 bit
+				using (RegistryKey chromeKey = Registry.CurrentUser.OpenSubKey(@"Software\Google\Chrome", true))
 				{
-					RegistryKey chromeKey = Registry.CurrentUser.OpenSubKey(@"Software\Google\Chrome\", true);
-					if(chromeKey == null)
-						chromeKey = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\Google\Chrome\", true);
 					if (chromeKey != null)
 					{
-						RegistryKey extensionsKey = chromeKey.OpenSubKey(@"Extensions", true);
-						if (extensionsKey == null)
+						using (RegistryKey extensionsKey = chromeKey.OpenSubKey(@"Extensions", true) ?? chromeKey.CreateSubKey("Extensions"))
+						using (RegistryKey pluginKey = extensionsKey?.CreateSubKey("goloffhdkngdkldehjjijobinpfcjpbj"))
 						{
-							extensionsKey = chromeKey.CreateSubKey("Extensions");
+							pluginKey?.SetValue("update_url", "https://clients2.google.com/service/update2/crx");
 						}
-						RegistryKey pluginKey = extensionsKey.CreateSubKey("goloffhdkngdkldehjjijobinpfcjpbj");
-						pluginKey.SetValue("update_url", "https://clients2.google.com/service/update2/crx");
-
-						pluginKey.Close();
-						extensionsKey.Close();
-						chromeKey.Close();
 					}
 				}
-				//// 64 bit
-				//{
-				//	RegistryKey bitKey = Registry.CurrentUser.OpenSubKey(@"Software\Wow6432Node", true);
-				//	if(bitKey != null)
-				//	{
-				//		RegistryKey chromeKey = Registry.CurrentUser.OpenSubKey(@"Software\Wow6432Node\Google\Chrome\", true);
-				//		if (chromeKey != null)
-				//		{
-				//			RegistryKey extensionsKey = chromeKey.OpenSubKey(@"Extensions", true);
-				//			if (extensionsKey == null)
-				//			{
-				//				extensionsKey = chromeKey.CreateSubKey("Extensions");
-				//			}
-				//			RegistryKey pluginKey = extensionsKey.CreateSubKey("goloffhdkngdkldehjjijobinpfcjpbj");
-				//			pluginKey.SetValue("update_url", "https://clients2.google.com/service/update2/crx");
-
-				//			pluginKey.Close();
-				//			extensionsKey.Close();
-				//			chromeKey.Close();
-				//		}
-				//	}
-				//}
-
-			} catch(Exception exc)
+			}
+			catch (Exception exc)
 			{
-
+				Bivrost.Log.LoggerManager.Error(exc, "InstallChromePlugin failed");
 			}
         }
     }

@@ -9,7 +9,5 @@ namespace Bivrost.Bivrost360Player.ConfigUI
 	public class StringConfigItemViewModel : ConfigItemBase<string>
 	{
 		public StringConfigItemViewModel(SettingsPropertyAttribute attr, Func<string> loadCallback, Action<string> saveCallback) : base(attr, loadCallback, saveCallback) { }
-
-		public bool ReadOnly { get; set; } = false;
 	}
 }

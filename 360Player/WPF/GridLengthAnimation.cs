@@ -77,17 +77,25 @@ namespace Bivrost.Bivrost360Player.WPF
 
 		public override object GetCurrentValue(object defaultOriginValue, object defaultDestinationValue, AnimationClock animationClock)
 		{
-			double fromVal = ((GridLength)GetValue(GridLengthAnimation.FromProperty)).Value;
-			double toVal = ((GridLength)GetValue(GridLengthAnimation.ToProperty)).Value;
+			if (animationClock == null || !animationClock.CurrentProgress.HasValue)
+				return defaultOriginValue;
 
-			bool hasEasing = EasingFunction != null;
+			GridLength fromGridLength = (GridLength)GetValue(GridLengthAnimation.FromProperty);
+			GridLength toGridLength = (GridLength)GetValue(GridLengthAnimation.ToProperty);
 
-			if (fromVal > toVal)
-			{
-				return new GridLength((1 - (hasEasing? EasingFunction.Ease(animationClock.CurrentProgress.Value) : animationClock.CurrentProgress.Value)) * (fromVal - toVal) + toVal, GridUnitType.Pixel);
-			}
-			else
-				return new GridLength((hasEasing ? EasingFunction.Ease(animationClock.CurrentProgress.Value) : animationClock.CurrentProgress.Value) * (toVal - fromVal) + fromVal, GridUnitType.Pixel);
+			double fromVal = fromGridLength.Value;
+			double toVal = toGridLength.Value;
+			double progress = animationClock.CurrentProgress.Value;
+			if (EasingFunction != null)
+				progress = EasingFunction.Ease(progress);
+
+			GridUnitType unitType = toGridLength.IsStar ? GridUnitType.Star : GridUnitType.Pixel;
+
+			double currentVal = fromVal > toVal
+				? (1 - progress) * (fromVal - toVal) + toVal
+				: progress * (toVal - fromVal) + fromVal;
+
+			return new GridLength(Math.Max(0.0, currentVal), unitType);
 		}
 	}
 }

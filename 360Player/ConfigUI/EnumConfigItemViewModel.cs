@@ -20,8 +20,12 @@ namespace Bivrost.Bivrost360Player.ConfigUI
 			enumMap = new Dictionary<string, int>();
 			foreach (object v in values)
 			{
-				enumMap.Add(GetDescription(v), (int)v);
-				EnumList.Add(GetDescription(v));
+				string desc = GetDescription(v);
+				if (!enumMap.ContainsKey(desc))
+				{
+					enumMap.Add(desc, (int)v);
+					EnumList.Add(desc);
+				}
 			}
 		}
 
@@ -29,32 +33,36 @@ namespace Bivrost.Bivrost360Player.ConfigUI
 		{
 			var type = enumObject.GetType();
 			var memberInfo = type.GetMember(enumObject.ToString());
-			var attributes = memberInfo[0].GetCustomAttributes(typeof(DescriptionAttribute), false);
-			if (attributes.Length > 0)
+			if (memberInfo.Length > 0)
 			{
-				var attr = attributes?.First() as DescriptionAttribute;
-				return attr.Description;
+				var attributes = memberInfo[0].GetCustomAttributes(typeof(DescriptionAttribute), false);
+				if (attributes.Length > 0)
+				{
+					var attr = attributes.First() as DescriptionAttribute;
+					if (attr != null)
+						return attr.Description;
+				}
 			}
-			else
-			{
-				return enumObject.ToString();
-			}
+			return enumObject.ToString();
 		}
-
-		public bool ReadOnly { get; set; } = false;
 
 		public List<string> EnumList { get; set; }
 
-		public string Value
+		public new string Value
 		{
 			get
 			{
-				return enumMap.First(e => ((int)e.Value) == base.Value).Key;
+				var match = enumMap.FirstOrDefault(e => e.Value == base.Value);
+				return match.Key ?? EnumList.FirstOrDefault();
 			}
 
 			set
 			{
-				base.Value = (int)enumMap[value];
+				if (value != null && enumMap.TryGetValue(value, out int enumVal))
+				{
+					base.Value = enumVal;
+					NotifyOfPropertyChange(() => Value);
+				}
             }
 		}
 

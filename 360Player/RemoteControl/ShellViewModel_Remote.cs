@@ -25,16 +25,50 @@ namespace Bivrost.Bivrost360Player
 
 
 
+		private string ResolveRemoteMoviePath(string requestedPath, out string displayName)
+		{
+			displayName = "";
+			if (string.IsNullOrWhiteSpace(requestedPath))
+				return null;
+
+			string baseDir = Logic.Instance.settings.RemoteControlMovieDirectory;
+			if (string.IsNullOrWhiteSpace(baseDir) || !Directory.Exists(baseDir))
+				return null;
+
+			// Normalize both forward and backward slashes and extract file name only
+			string fileName = Path.GetFileName(requestedPath.Replace('/', Path.DirectorySeparatorChar));
+			displayName = fileName ?? "";
+			if (string.IsNullOrWhiteSpace(fileName) || fileName == "." || fileName == "..")
+				return null;
+
+			string fullBase = Path.GetFullPath(baseDir).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+			string fullCandidate = Path.GetFullPath(Path.Combine(baseDir, fileName));
+			if (!fullCandidate.StartsWith(fullBase, StringComparison.OrdinalIgnoreCase))
+				return null;
+
+			return File.Exists(fullCandidate) ? fullCandidate : null;
+		}
+
 		private void EnableRemoteControl()
 		{
+			if (IsRemoteControlEnabled) return;
+			if (!Features.RemoteEnabled) return;
+
 			Task.Factory.StartNew((System.Action)(() =>
 			{
-				remoteControl = ApiServer.InitNancy(apiServer =>
+				try
+				{
+					remoteControl = ApiServer.InitNancy(apiServer =>
 					{
-						remoteLogger.Info("got unity init, device_id=" + ApiServer.device_id + " movies=[\n" + string.Join(",\n", ApiServer.movies) + "]");
+						remoteLogger.Info("got unity init, device_id=" + ApiServer.device_id + " movies=[\n" + string.Join(",\n", ApiServer.movies ?? new string[0]) + "]");
 						remoteLogger.Info("init complete");
-					}
-				);
+					});
+				}
+				catch (Exception ex)
+				{
+					remoteLogger.Error(ex, "Failed to start remote control HTTP server");
+					return;
+				}
 
 #region GearVR slave app
 
@@ -49,14 +83,6 @@ namespace Bivrost.Bivrost360Player
 
 					switch (state)
 					{
-						//case ApiServer.State.off:
-						//	Execute.OnUIThreadAsync(() =>
-						//	{
-						//		if(IsPlaying)
-						//			Stop();
-						//	});
-						//	break;
-
 						case ApiServer.State.pause:
 							Execute.OnUIThreadAsync(() =>
 							{
@@ -72,9 +98,18 @@ namespace Bivrost.Bivrost360Player
 							Execute.OnUIThreadAsync((System.Action)(() =>
 							{
 								if (!_ready)
-									this.OpenURI((string)SelectedFileName);
-								else
-									PlayPause();
+								{
+									if (!string.IsNullOrWhiteSpace(SelectedFileName))
+										this.OpenURI(SelectedFileName);
+								}
+								else if (!IsPlaying)
+								{
+									Play();
+								}
+								else if (IsPaused)
+								{
+									UnPause();
+								}
 							}));
 							break;
 
@@ -91,42 +126,52 @@ namespace Bivrost.Bivrost360Player
 				ApiServer.OnConfirmPlay += (path) =>
 				{
 					remoteLogger.Info("path = " + path);
-					string remoteFile = path.Split('/').Last();
-					if (File.Exists(Logic.Instance.settings.RemoteControlMovieDirectory + Path.DirectorySeparatorChar + remoteFile))
+					string fullPath = ResolveRemoteMoviePath(path, out string remoteFile);
+					if (fullPath != null)
 					{
-						IsFileSelected = true;
-						SelectedFileName = Logic.Instance.settings.RemoteControlMovieDirectory + Path.DirectorySeparatorChar + remoteFile;
+						Execute.OnUIThreadAsync(() =>
+						{
+							try
+							{
+								var result = Streaming.StreamingFactory.Instance.GetStreamingInfo(fullPath);
+								if (result != null)
+								{
+									SelectedServiceResult = result;
+									IsFileSelected = true;
+								}
+							}
+							catch (Exception ex)
+							{
+								remoteLogger.Error(ex, "Failed to resolve remote movie");
+							}
+						});
 					}
 					else
 					{
-						IsFileSelected = false;
-						SelectedFileName = "";
-
-						Execute.OnUIThreadAsync(() => NotificationCenter.PushNotification(new NotificationViewModel("Requested file \"" + remoteFile + "\" not found in video library.",
-							() =>
-							{
-								System.Diagnostics.Process.Start(Logic.Instance.settings.RemoteControlMovieDirectory);
-							}, "open folder")));
+						Execute.OnUIThreadAsync(() =>
+						{
+							IsFileSelected = false;
+							SelectedServiceResult = null;
+							NotificationCenter.PushNotification(new NotificationViewModel("Requested file \"" + remoteFile + "\" not found in video library.",
+								() =>
+								{
+									try { System.Diagnostics.Process.Start(Logic.Instance.settings.RemoteControlMovieDirectory); } catch (Exception) { }
+								}, "open folder"));
+						});
 					}
 				};
 
 				ApiServer.OnPos += (euler, t) =>
 				{
-					//Log("[remote] position = " + euler.Item1 + ", " + euler.Item2 + ", " + euler.Item3, ConsoleColor.DarkGreen);
-					//remoteTime = (float)(t * MaxTime);
-					//if (DXCanvas.Scene != null)
-					//{
-					//	((Scene)DXCanvas.Scene).SetLook(euler);
-					//}
 				};
 
 				ApiServer.OnPosQuaternion += (quat, t) =>
 				{
-					//Log("[remote] position = " + quat.Item1 + ", " + euler.Item2 + ", " + euler.Item3, ConsoleColor.DarkGreen);
 					remoteTime = (float)(t * MaxTime);
-					if (DXCanvas.Scene != null)
+					var scene = DXCanvas?.Scene as Scene;
+					if (scene != null)
 					{
-						((Scene)DXCanvas.Scene).SetLook(quat);
+						scene.SetLook(quat);
 					}
 				};
 
@@ -145,26 +190,41 @@ namespace Bivrost.Bivrost360Player
 				ApiServer.CommandLoadHandler = (movie, autoplay) =>
 				{
 					remoteLogger.Info("[remote] path = " + movie);
-					string remoteFile = movie.Contains('/') ? movie.Split('/').Last() : movie;
-					if (File.Exists(Logic.Instance.settings.RemoteControlMovieDirectory + Path.DirectorySeparatorChar + remoteFile))
+					string fullPath = ResolveRemoteMoviePath(movie, out string remoteFile);
+					if (fullPath != null)
 					{
-						IsFileSelected = true;
-						SelectedFileName = Logic.Instance.settings.RemoteControlMovieDirectory + Path.DirectorySeparatorChar + remoteFile;
-
-						this.LoadMedia(autoplay);
-
-						return true;
+						bool loaded = false;
+						Execute.OnUIThread(() =>
+						{
+							try
+							{
+								var result = Streaming.StreamingFactory.Instance.GetStreamingInfo(fullPath);
+								if (result != null)
+								{
+									ResetPlayback();
+									LoadMedia(result, autoplay);
+									loaded = true;
+								}
+							}
+							catch (Exception ex)
+							{
+								remoteLogger.Error(ex, "Failed to load remote movie");
+							}
+						});
+						return loaded;
 					}
 					else
 					{
-						IsFileSelected = false;
-						SelectedFileName = "";
-
-						Execute.OnUIThreadAsync(() => NotificationCenter.PushNotification(new NotificationViewModel("Requested file \"" + remoteFile + "\" not found in video library.",
-							() =>
-							{
-								System.Diagnostics.Process.Start(Logic.Instance.settings.RemoteControlMovieDirectory);
-							}, "open folder")));
+						Execute.OnUIThreadAsync(() =>
+						{
+							IsFileSelected = false;
+							SelectedServiceResult = null;
+							NotificationCenter.PushNotification(new NotificationViewModel("Requested file \"" + remoteFile + "\" not found in video library.",
+								() =>
+								{
+									try { System.Diagnostics.Process.Start(Logic.Instance.settings.RemoteControlMovieDirectory); } catch (Exception) { }
+								}, "open folder"));
+						});
 						return false;
 					}
 				};
@@ -186,7 +246,7 @@ namespace Bivrost.Bivrost360Player
 						}
 						catch (Exception exc)
 						{
-
+							remoteLogger.Error(exc, "Failed to enumerate remote movies");
 						}
 					}
 					return movies.ToArray();
@@ -194,12 +254,16 @@ namespace Bivrost.Bivrost360Player
 
 				ApiServer.CommandPauseHandler = () =>
 				{
-					if (IsPlaying && !IsPaused)
+					bool result = false;
+					Execute.OnUIThread(() =>
 					{
-						Pause();
-						return true;
-					}
-					return false;
+						if (IsPlaying && !IsPaused)
+						{
+							Pause();
+							result = true;
+						}
+					});
+					return result;
 				};
 
 				ApiServer.CommandPlayingHandler = () =>
@@ -216,13 +280,14 @@ namespace Bivrost.Bivrost360Player
 						tmax = 0
 					};
 
-					if (IsFileSelected) info.movie = SelectedFileName;
+					if (IsFileSelected) info.movie = SelectedFileName ?? "";
 					if (IsPlaying)
 					{
 						info.is_playing = !IsPaused;
-						if (this.DXCanvas.Scene != null)
+						var scene = this.DXCanvas?.Scene as Scene;
+						if (scene != null)
 						{
-							var q = ((Scene)this.DXCanvas.Scene).GetCurrentLook();
+							var q = scene.GetCurrentLook();
 							info.quat_x = q.X;
 							info.quat_y = q.Y;
 							info.quat_z = q.Z;
@@ -237,37 +302,49 @@ namespace Bivrost.Bivrost360Player
 
 				ApiServer.CommandSeekHandler = (time) =>
 				{
-					if (IsPlaying)
+					bool result = false;
+					Execute.OnUIThread(() =>
 					{
-						TimeValue = time;
-						return true;
-					}
-					return false;
+						if (IsPlaying)
+						{
+							TimeValue = time;
+							result = true;
+						}
+					});
+					return result;
 				};
 
 				ApiServer.CommandStopAndResetHandler = () =>
 				{
-					if (IsPlaying)
+					bool result = false;
+					Execute.OnUIThread(() =>
 					{
-						Stop();
-						return true;
-					}
-					return false;
+						if (IsPlaying)
+						{
+							Stop();
+							result = true;
+						}
+					});
+					return result;
 				};
 
 				ApiServer.CommandUnpauseHandler = () =>
 				{
-					if (IsPlaying && IsPaused)
+					bool result = false;
+					Execute.OnUIThread(() =>
 					{
-						UnPause();
-						return true;
-					}
-					if (!IsPlaying && IsFileSelected)
-					{
-						PlayPause();
-						return true;
-					}
-					return false;
+						if (IsPlaying && IsPaused)
+						{
+							UnPause();
+							result = true;
+						}
+						else if (!IsPlaying && IsFileSelected)
+						{
+							PlayPause();
+							result = true;
+						}
+					});
+					return result;
 				};
 
 

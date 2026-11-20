@@ -55,7 +55,10 @@ namespace Bivrost.Bivrost360Player.OSVRKit
 									}
 									Thread.Sleep(1);
 									contextRetry++;
-								} while (!displayConfig.CheckDisplayStartup() || contextRetry < 300);
+								} while (!displayConfig.CheckDisplayStartup() && contextRetry < 300);
+
+								if (!displayConfig.CheckDisplayStartup())
+									continue;
 
 								var numDisplayInputs = displayConfig.GetNumDisplayInputs();
 
@@ -124,13 +127,16 @@ namespace Bivrost.Bivrost360Player.OSVRKit
 						contextRetry++;
 						if (abort)
 						{
+							displayConfig.Dispose();
 							context.Dispose();
 							Lock = false;
 							return;
 						}
 						Thread.Sleep(1);
-					} while (!displayConfig.CheckDisplayStartup() || contextRetry < 300);
+					} while (!displayConfig.CheckDisplayStartup() && contextRetry < 300);
 					if (displayConfig.CheckDisplayStartup()) break;
+					displayConfig.Dispose();
+					displayConfig = null;
 				}
 			}
 			if (displayConfig == null)
@@ -143,6 +149,7 @@ namespace Bivrost.Bivrost360Player.OSVRKit
 			var numDisplayInputs = displayConfig.GetNumDisplayInputs();
 			if (numDisplayInputs != 1)
 			{
+				displayConfig.Dispose();
 				context.Dispose();
 				Lock = false;
 				return;
@@ -153,6 +160,7 @@ namespace Bivrost.Bivrost360Player.OSVRKit
 
 			if (numViewers != 1)
 			{
+				displayConfig.Dispose();
 				context.Dispose();
 				Lock = false;
 				return;
@@ -194,32 +202,24 @@ namespace Bivrost.Bivrost360Player.OSVRKit
 
 			using (SharpDX.DXGI.Device2 dxgiDevice = _device.QueryInterface<SharpDX.DXGI.Device2>())
 			{
-
-				//var bounds = dxgiDevice.Adapter.Outputs[1].Description.DesktopBounds;
-				//form.DesktopBounds = new System.Drawing.Rectangle(bounds.X, bounds.Y, bounds.Width, bounds.Height);
-
-				//dxgiDevice.Adapter.Outputs.ToList().ForEach(o =>
-				//{
-				//    if (o.Description.DeviceName.EndsWith("2"))
-				//    {
-				//        swapChain.SetFullscreenState(true, o);
-				//    }
-				//});
+				var outputs = dxgiDevice.Adapter.Outputs;
+				if (outputs.Length == 0)
+					throw new HeadsetError("OSVR: No display outputs found on graphics adapter.");
 
 				Rectangle bounds;
 
 				if (Features.IsDebug)
 				{
-					log.Info("OSVR: available screens: " + string.Join("\n", dxgiDevice.Adapter.Outputs.ToList().ConvertAll(o => o.Description.DeviceName + " (" + o.Description.DesktopBounds + ")")));
+					log.Info("OSVR: available screens: " + string.Join("\n", outputs.ToList().ConvertAll(o => o.Description.DeviceName + " (" + o.Description.DesktopBounds + ")")));
 				}
 
 				if (Logic.Instance.settings.OSVRScreen == ScreenSelection.Autodetect)
 				{
 					// start with last screen
-					Output output = dxgiDevice.Adapter.Outputs[dxgiDevice.Adapter.Outputs.Length - 1];
+					Output output = outputs[outputs.Length - 1];
 
 					// but something resembling a HDK 1.4 (1920x1080) will be better
-					foreach (var o in dxgiDevice.Adapter.Outputs)
+					foreach (var o in outputs)
 					{
 						var b = o.Description.DesktopBounds;
 						if (b.Width == 1920 && b.Height == 1080)
@@ -230,7 +230,7 @@ namespace Bivrost.Bivrost360Player.OSVRKit
 					}
 
 					// and something resembling a HDK 2.0 (2160x1200) will be even more better
-					foreach (var o in dxgiDevice.Adapter.Outputs)
+					foreach (var o in outputs)
 					{
 						var b = o.Description.DesktopBounds;
 						if (b.Width == 2160 && b.Height == 1200)
@@ -246,15 +246,17 @@ namespace Bivrost.Bivrost360Player.OSVRKit
 				else
 				{
 					int osvrScreen = (int)Logic.Instance.settings.OSVRScreen;
-					if (osvrScreen >= dxgiDevice.Adapter.Outputs.Length)
-						osvrScreen = dxgiDevice.Adapter.Outputs.Length - 1;
-					bounds = dxgiDevice.Adapter.Outputs[osvrScreen].Description.DesktopBounds;
+					if (osvrScreen >= outputs.Length)
+						osvrScreen = outputs.Length - 1;
+					if (osvrScreen < 0)
+						osvrScreen = 0;
+					bounds = outputs[osvrScreen].Description.DesktopBounds;
 					log.Info($"OSVR: selected output #{osvrScreen} ({bounds})");
 				}
 
 				form.DesktopBounds = new System.Drawing.Rectangle(bounds.X, bounds.Y, bounds.Width, bounds.Height);
 
-				if (dxgiDevice.Adapter.Outputs.Length <= 1)
+				if (outputs.Length <= 1)
 					Logic.Notify("Only one screen is active. Press Control+S to stop the movie if needed.");
 			}
 
@@ -335,66 +337,57 @@ namespace Bivrost.Bivrost360Player.OSVRKit
 					immediateContext.ClearRenderTargetView(renderView, Color.Black);
 
 					uint viewer = 0;
+					var numEyes = displayConfig.GetNumEyesForViewer(viewer);
 
-					for (int eyeIndex = 0; eyeIndex < 2; eyeIndex++)
+					vrui.Update(deltaTime, ShouldShowVRUI);
+
+					for (byte eye = 0; eye < numEyes; eye++)
 					{
-						var numEyes = displayConfig.GetNumEyesForViewer(viewer);
-						var viewerPose = displayConfig.GetViewerPose(viewer);
+						uint numSurfaces = displayConfig.GetNumSurfacesForViewerEye(viewer, eye);
+						Pose3 viewerEyePose = displayConfig.GetViewerEyePose(viewer, eye);
+						uint surface = 0;
+						OSVR.ClientKit.Viewport viewport = displayConfig.GetRelativeViewportForViewerEyeSurface(viewer, eye, surface);
+						Matrix44f projectionf = displayConfig.GetProjectionMatrixForViewerEyeSurfacef(viewer, eye, surface, 0.001f, 1000.0f, MatrixConventionsFlags.Default);
 
+						ViewportF vp = new ViewportF(viewport.Left, viewport.Bottom, viewport.Width, viewport.Height);
+						immediateContext.Rasterizer.SetViewport(vp);
 
+						Vector3 lookPosition = viewerEyePose.translation.ToVector3();
 
-						for (byte eye = 0; eye < numEyes; eye++)
+						SharpDX.Quaternion lookRotation = viewerEyePose.rotation.ToQuaternion();
+						Matrix rotationMatrix = Matrix.RotationQuaternion(lookRotation);
+						Vector3 lookUp = Vector3.Transform(new Vector3(0, 1, 0), rotationMatrix).ToVector3();
+						Vector3 lookAt = Vector3.Transform(new Vector3(0, 0, -1), rotationMatrix).ToVector3();
+						Matrix viewMatrix = Matrix.LookAtRH(lookPosition, lookPosition + lookAt, lookUp);
+
+						Matrix projectionMatrix = projectionf.ToMatrix();
+
+						Matrix worldMatrix = Matrix.Translation(lookPosition);
+
+						Matrix MVP = worldMatrix * viewMatrix * projectionMatrix;
+						customEffectL.Parameters["WorldViewProj"].SetValue(MVP);
+						customEffectR.Parameters["WorldViewProj"].SetValue(MVP);
+
+						lock (localCritical)
 						{
-							uint numSurfaces = displayConfig.GetNumSurfacesForViewerEye(viewer, eye);
-							Pose3 viewerEyePose = displayConfig.GetViewerEyePose(viewer, eye);
-							Matrix44f viewerEyeMatrixf = displayConfig.GetViewerEyeViewMatrixf(viewer, eye, MatrixConventionsFlags.Default);
-							uint surface = 0;
-							OSVR.ClientKit.Viewport viewport = displayConfig.GetRelativeViewportForViewerEyeSurface(viewer, eye, surface);
-							Matrix44f projectionf = displayConfig.GetProjectionMatrixForViewerEyeSurfacef(viewer, eye, surface, 0.001f, 1000.0f, MatrixConventionsFlags.Default);
-							ProjectionClippingPlanes projectionClippingPlanes = displayConfig.GetViewerEyeSurfaceProjectionClippingPlanes(viewer, eye, surface);
-
-							ViewportF vp = new ViewportF(viewport.Left, viewport.Bottom, viewport.Width, viewport.Height);
-							immediateContext.Rasterizer.SetViewport(vp);
-
-							Vector3 lookPosition = viewerEyePose.translation.ToVector3();
-
-							SharpDX.Quaternion lookRotation = viewerEyePose.rotation.ToQuaternion();
-							Matrix rotationMatrix = Matrix.RotationQuaternion(lookRotation);
-							Vector3 lookUp = Vector3.Transform(new Vector3(0, 1, 0), rotationMatrix).ToVector3();
-							Vector3 lookAt = Vector3.Transform(new Vector3(0, 0, -1), rotationMatrix).ToVector3();
-							Matrix viewMatrix = Matrix.LookAtRH(lookPosition, lookPosition + lookAt, lookUp);
-
-							Matrix projectionMatrix = projectionf.ToMatrix();
-
-							Matrix worldMatrix = Matrix.Translation(lookPosition);
-
-							Matrix MVP = worldMatrix * viewMatrix * projectionMatrix;
-							customEffectL.Parameters["WorldViewProj"].SetValue(MVP);
-							customEffectR.Parameters["WorldViewProj"].SetValue(MVP);
-
-							lock (localCritical)
-							{
-								if (eye == 0)
-									primitive?.Draw(customEffectL);
-								if (eye == 1)
-									primitive?.Draw(customEffectR);
-							}
-
-							// reset UI position every frame if it is not visible
-							if (vrui.isUIHidden)
-								vrui.SetWorldPosition(viewMatrix.Forward, lookPosition, true);
-
-                            if (eye == 0)
-                            {
-                                lookRotation.Invert();
-                                ProvideLook?.Invoke(lookPosition, lookRotation, OSVRFOV);
-                            }
-
-                            vrui.Draw(Media, currentTime, Duration);
-							vrui.Render(deltaTime, viewMatrix, projectionMatrix, lookPosition, ShouldShowVRUI);
+							if (eye == 0)
+								primitive?.Draw(customEffectL);
+							if (eye == 1)
+								primitive?.Draw(customEffectR);
 						}
 
+						// reset UI position every frame if it is not visible
+						if (vrui.isUIHidden || (eye == 0 && vrui.ConsumeRecenterRequest()))
+							vrui.SetWorldPosition(viewMatrix.Forward, lookPosition, true);
 
+						if (eye == 0)
+						{
+							lookRotation.Invert();
+							ProvideLook?.Invoke(lookPosition, lookRotation, OSVRFOV);
+						}
+
+						vrui.Draw(Media, currentTime, Duration, FileBrowser, IsSeekBarOnlyMode, IsVolumeBarOnlyMode, currentVolume, currentVolumeMuted, IsStatusHudOnlyMode, statusHudText, statusHudProgress);
+						vrui.Render(deltaTime, viewMatrix, projectionMatrix, lookPosition, ShouldShowVRUI, updateAlpha: false);
 					}
 
 					swapChain.Present(0, PresentFlags.None);
@@ -404,6 +397,7 @@ namespace Bivrost.Bivrost360Player.OSVRKit
 				//debugWindow.Stop();
 
 				waitForRendererStop.Set();
+				CleanupResources();
 
 				//swapChain.SetFullscreenState(false, null);
 

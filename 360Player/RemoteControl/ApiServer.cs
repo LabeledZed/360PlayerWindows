@@ -71,25 +71,35 @@ namespace Bivrost.Bivrost360Player
 		/// </summary>
 		public class Status
 		{
+			private readonly object _sync = new object();
 			public Dictionary<int, string[]> commands = new Dictionary<int, string[]>();
 
 			public int max_id = 0;
 
 			internal void Ack(int maxId)
 			{
-				foreach (var k in commands.Keys.ToList())
-					if (k <= maxId)
-						commands.Remove(k);
+				lock (_sync)
+				{
+					foreach (var k in commands.Keys.ToList())
+						if (k <= maxId)
+							commands.Remove(k);
+				}
 			}
 
 			internal void Command(params string[] p)
 			{
-				commands[++max_id] = p;
+				lock (_sync)
+				{
+					commands[++max_id] = p;
+				}
 			}
 
 			internal string ToJson()
 			{
-				return JsonConvert.SerializeObject(this);
+				lock (_sync)
+				{
+					return JsonConvert.SerializeObject(this);
+				}
 			}
 		}
 
@@ -118,9 +128,9 @@ namespace Bivrost.Bivrost360Player
 		public static void CommandReset() { status.Command("reset"); }
 		public static void CommandSettings(bool repeat, bool resetOnPutOn) { status.Command("settings", repeat ? "true" : "false", resetOnPutOn ? "true" : "false"); }
 		public static void CommandMessage(string message) { status.Command("message", message); }
-		public static void CommandOffset(float eulerX, float eulerY, float eulerZ) { status.Command("offset", eulerX.ToString("000.0"), eulerY.ToString("000.0"), eulerZ.ToString("000.0")); }
-		public static void CommandSeek01(float t01) { status.Command("seek01", t01.ToString("0.000000")); }
-		public static void CommandSeek(float t) { status.Command("seek01", t.ToString("00000.00")); }
+		public static void CommandOffset(float eulerX, float eulerY, float eulerZ) { status.Command("offset", eulerX.ToString("000.0", CultureInfo.InvariantCulture), eulerY.ToString("000.0", CultureInfo.InvariantCulture), eulerZ.ToString("000.0", CultureInfo.InvariantCulture)); }
+		public static void CommandSeek01(float t01) { status.Command("seek01", t01.ToString("0.000000", CultureInfo.InvariantCulture)); }
+		public static void CommandSeek(float t) { status.Command("seek", t.ToString("00000.00", CultureInfo.InvariantCulture)); }
 		public static void CommandReinit() { status.Command("reinit"); }
 
 
@@ -160,8 +170,9 @@ namespace Bivrost.Bivrost360Player
                 state = State.init;
 
                 var q = Request.Query;
-                device_id = q.device_id;
-                movies = this.Bind<List<MovieContainer>>().ConvertAll(mc => mc.movie).ToArray();
+                device_id = (string)q.device_id;
+                var boundMovies = this.Bind<List<MovieContainer>>();
+                movies = boundMovies != null ? boundMovies.Where(mc => mc != null).Select(mc => mc.movie).ToArray() : new string[0];
 
                 if (OnInit != null)
                     OnInit(this);
@@ -171,8 +182,11 @@ namespace Bivrost.Bivrost360Player
 
             Get["/state-change"] = p =>
             {
-                var q = Request.Query;
-                state = System.Enum.Parse(typeof(State), q.state);
+                string stateStr = (string)Request.Query.state;
+                if (string.IsNullOrEmpty(stateStr) || !Enum.TryParse(stateStr, true, out State parsedState))
+                    return HttpStatusCode.BadRequest;
+
+                state = parsedState;
 
                 if (OnStateChange != null)
                     OnStateChange(state);
@@ -183,14 +197,21 @@ namespace Bivrost.Bivrost360Player
             Get["/pos"] = p =>
             {
                 var q = Request.Query;
-                euler = new Tuple<float, float, float>(float.Parse(q.euler_x, CultureInfo.InvariantCulture), float.Parse(q.euler_y, CultureInfo.InvariantCulture), float.Parse(q.euler_z, CultureInfo.InvariantCulture));
-                t01 = float.Parse(q.t01, CultureInfo.InvariantCulture);
-                var quat = new Tuple<float, float, float, float>(
-                    float.Parse(q.quat_x, CultureInfo.InvariantCulture),
-                    float.Parse(q.quat_y, CultureInfo.InvariantCulture),
-                    float.Parse(q.quat_z, CultureInfo.InvariantCulture),
-                    float.Parse(q.quat_w, CultureInfo.InvariantCulture)
-                    );
+                if (!float.TryParse((string)q.euler_x, NumberStyles.Float, CultureInfo.InvariantCulture, out float ex) ||
+                    !float.TryParse((string)q.euler_y, NumberStyles.Float, CultureInfo.InvariantCulture, out float ey) ||
+                    !float.TryParse((string)q.euler_z, NumberStyles.Float, CultureInfo.InvariantCulture, out float ez) ||
+                    !float.TryParse((string)q.t01, NumberStyles.Float, CultureInfo.InvariantCulture, out float parsedT01) ||
+                    !float.TryParse((string)q.quat_x, NumberStyles.Float, CultureInfo.InvariantCulture, out float qx) ||
+                    !float.TryParse((string)q.quat_y, NumberStyles.Float, CultureInfo.InvariantCulture, out float qy) ||
+                    !float.TryParse((string)q.quat_z, NumberStyles.Float, CultureInfo.InvariantCulture, out float qz) ||
+                    !float.TryParse((string)q.quat_w, NumberStyles.Float, CultureInfo.InvariantCulture, out float qw))
+                {
+                    return HttpStatusCode.BadRequest;
+                }
+
+                euler = new Tuple<float, float, float>(ex, ey, ez);
+                t01 = parsedT01;
+                var quat = new Tuple<float, float, float, float>(qx, qy, qz, qw);
 
                 if (OnPos != null)
                     OnPos(euler, t01);
@@ -211,8 +232,8 @@ namespace Bivrost.Bivrost360Player
 
             Get["/ack"] = p =>
             {
-                var q = Request.Query;
-                int max_id = q.max_id;
+                if (!int.TryParse((string)Request.Query.max_id, NumberStyles.Integer, CultureInfo.InvariantCulture, out int max_id))
+                    return HttpStatusCode.BadRequest;
                 status.Ack(max_id);
 
                 return status.ToJson();
@@ -220,7 +241,7 @@ namespace Bivrost.Bivrost360Player
 
             Post["/info"] = p =>
             {
-                string message = Request.Form["message"];
+                string message = (string)Request.Form["message"] ?? "";
 
                 if (OnInfo != null)
                     OnInfo(message);
@@ -230,7 +251,9 @@ namespace Bivrost.Bivrost360Player
 
             Post["/confirm-play"] = p =>
             {
-                string path = Request.Form["path"];
+                string path = (string)Request.Form["path"];
+                if (string.IsNullOrWhiteSpace(path))
+                    return HttpStatusCode.BadRequest;
 
                 if (OnConfirmPlay != null)
                     OnConfirmPlay(path);
@@ -239,57 +262,65 @@ namespace Bivrost.Bivrost360Player
             };
 
             /// control API
-
-            /// TODO
-            //Get["/movies"] = p => JsonConvert.SerializeObject(new string[] { "TODO", "list", "movies" });
             Get["/movies"] = p => JsonConvert.SerializeObject(CommandMoviesHandler == null ? new string[] { } : CommandMoviesHandler());
 
-            //Get["/load"] = p => { bool autoplay = p.autoplay; string movie = p.movie; return "true"; };
             Get["/load"] = p =>
             {
-                var q = Request.Query;
-                return JsonConvert.SerializeObject(CommandLoadHandler == null ? false : CommandLoadHandler(q.movie, q.autoplay));
+                string movie = (string)Request.Query.movie;
+                if (string.IsNullOrWhiteSpace(movie))
+                    return HttpStatusCode.BadRequest;
+                bool autoplay = false;
+                bool.TryParse((string)Request.Query.autoplay, out autoplay);
+                return JsonConvert.SerializeObject(CommandLoadHandler == null ? false : CommandLoadHandler(movie, autoplay));
             };
 
-            //Get["/seek"] = p => { float t = p.t; return "true"; };
-            Get["/seek"] = p => JsonConvert.SerializeObject(CommandSeekHandler == null ? false : CommandSeekHandler(Request.Query.t));
+            Get["/seek"] = p =>
+            {
+                if (!float.TryParse((string)Request.Query.t, NumberStyles.Float, CultureInfo.InvariantCulture, out float seekTime))
+                    return HttpStatusCode.BadRequest;
+                return JsonConvert.SerializeObject(CommandSeekHandler == null ? false : CommandSeekHandler(seekTime));
+            };
 
-            //Get["/stop-and-reset"] = p => "true";
             Get["/stop-and-reset"] = p => JsonConvert.SerializeObject(CommandStopAndResetHandler == null ? false : CommandStopAndResetHandler());
 
-            //Get["/pause"] = p => "true";
             Get["/pause"] = p => JsonConvert.SerializeObject(CommandPauseHandler == null ? false : CommandPauseHandler());
 
-            //Get["/unpause"] = p => "true";
             Get["/unpause"] = p => JsonConvert.SerializeObject(CommandUnpauseHandler == null ? false : CommandUnpauseHandler());
 
-            //       Get["/playing"] = p => JsonConvert.SerializeObject(new PlayingInfo() 
-            //{ is_playing = true, movie="fake", 
-            //  quat_x=0.1f, quat_y=0.4f, quat_z=0.2f, quat_w=(float)Math.Sqrt(0.1*0.1 + 0.4*0.4 + 0.2+0.2), 
-            //  t=13.37f, tmax=66.60f	}
             Get["/playing"] = p => JsonConvert.SerializeObject(CommandPlayingHandler == null ? new PlayingInfo() { is_playing = false, movie = "", quat_x = 0f, quat_y = 0f, quat_z = 0f, quat_w = 0f, t = 0f, tmax = 0f } : CommandPlayingHandler());
-			
-            
-            /// END TODO
 
 			Get["/events"] = p =>
 			{
-				OutgoingEvent ev;
-				// timeout after 10 seconds and return an empty array
-				if (outgoingEvents.TryTake(out ev, TimeSpan.FromSeconds(10)))
+				var waitTimer = Stopwatch.StartNew();
+				TimeSpan totalTimeout = TimeSpan.FromSeconds(10);
+
+				while (waitTimer.Elapsed < totalTimeout)
 				{
-					var r = new List<OutgoingEvent> { ev };
-					while (outgoingEvents.TryTake(out ev, TimeSpan.FromMilliseconds(0.1)))
-						r.Add(ev);
-					// ignore all events older than 5 sec
-					r.RemoveAll(e => e.created.Elapsed > TimeSpan.FromMilliseconds(5000));
-					return JsonConvert.SerializeObject(r);
+					TimeSpan remaining = totalTimeout - waitTimer.Elapsed;
+					if (remaining <= TimeSpan.Zero)
+						break;
+
+					OutgoingEvent ev;
+					if (outgoingEvents.TryTake(out ev, remaining))
+					{
+						var r = new List<OutgoingEvent> { ev };
+						while (outgoingEvents.TryTake(out ev, TimeSpan.Zero))
+							r.Add(ev);
+						// ignore all events older than 5 sec
+						r.RemoveAll(e => e.created.Elapsed > TimeSpan.FromMilliseconds(5000));
+						if (r.Count > 0)
+							return JsonConvert.SerializeObject(r);
+					}
+					else
+					{
+						break;
+					}
 				}
 
 				return "[]";
 			};
 
-			// temp
+#if DEBUG
 			Get["/__eventtester"] = p =>
 			{
 				AddOutgoingEvent("ev1", "arg1");
@@ -297,9 +328,11 @@ namespace Bivrost.Bivrost360Player
 				AddOutgoingEvent("ev3", "arg3");
 				return "\"done\"";
 			};
+#endif
 		}
 
-		static BlockingCollection<OutgoingEvent> outgoingEvents = new BlockingCollection<OutgoingEvent>();
+		private const int MaxOutgoingEvents = 256;
+		static BlockingCollection<OutgoingEvent> outgoingEvents = new BlockingCollection<OutgoingEvent>(MaxOutgoingEvents);
 
 		class OutgoingEvent {
 			public string name;
@@ -312,7 +345,12 @@ namespace Bivrost.Bivrost360Player
 		public static void AddOutgoingEvent(string name, string arg) {
 			var og = new OutgoingEvent() { name = name, arg = arg };
 			og.created.Start();
-			outgoingEvents.Add(og);
+			while (!outgoingEvents.TryAdd(og))
+			{
+				OutgoingEvent discarded;
+				if (!outgoingEvents.TryTake(out discarded))
+					break;
+			}
 		}
 
 

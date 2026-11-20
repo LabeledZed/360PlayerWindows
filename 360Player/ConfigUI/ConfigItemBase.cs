@@ -25,9 +25,13 @@ namespace Bivrost.Bivrost360Player.ConfigUI
 			_attr = attr;
 			_saveCallback = saveCallback;
 			_loadCallback = loadCallback;
+			ReadOnly = attr?.ReadOnly ?? false;
 
 			Value = _loadCallback();
 		}
+
+		public bool ReadOnly { get; set; } = false;
+		public bool Enabled { get { return !this.ReadOnly; } }
 
 		public string DisplayName { get { return _attr.DisplayName; } }
 

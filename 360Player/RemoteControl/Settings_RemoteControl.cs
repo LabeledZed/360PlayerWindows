@@ -12,13 +12,7 @@ namespace Bivrost.Bivrost360Player
 	{
 		//Remote control settings
 		[SettingsAdvancedProperty("Enable http remote control (requires restart)", ConfigItemType.Bool, requiredFeatures = FeaturesEnum.remote)]
-		public bool EnableRemoteControl
-		{
-			get { return _enableRemoteControl && Features.RemoteEnabled; }
-			set { _enableRemoteControl = value; }
-		}
-		[JsonIgnore]
-		bool _enableRemoteControl = false;
+		public bool EnableRemoteControl { get; set; } = false;
 
 
 		[SettingsAdvancedProperty("Movie directory for remote control playback", ConfigItemType.Path, requiredFeatures = FeaturesEnum.remote)]
@@ -29,7 +23,7 @@ namespace Bivrost.Bivrost360Player
 
 	internal class RemoteControlSettingVerificatorAttribute:SettingVerificationAttribute
 	{
-		public override bool Valid => true;
+		public override bool Valid => Directory.Exists(Logic.Instance.settings.RemoteControlMovieDirectory);
 
 		public override void Normalize() {
 			if (!Directory.Exists(Logic.Instance.settings.RemoteControlMovieDirectory))

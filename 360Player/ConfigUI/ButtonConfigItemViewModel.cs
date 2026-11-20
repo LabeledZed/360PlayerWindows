@@ -13,6 +13,7 @@ namespace Bivrost.Bivrost360Player.ConfigUI
 		public ButtonConfigItemViewModel(SettingsPropertyAttribute attr, System.Action callback) {
 			ActionText = attr.Caption;
 			DisplayName = attr.DisplayName;
+			ReadOnly = attr.ReadOnly;
 			_callback = callback;
 		}
 
@@ -23,7 +24,8 @@ namespace Bivrost.Bivrost360Player.ConfigUI
 
 		public void DoAction()
 		{
-			_callback();
+			if (!ReadOnly)
+				_callback();
 		}
 	}
 }

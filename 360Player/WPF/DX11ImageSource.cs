@@ -76,7 +76,7 @@ namespace Bivrost.Bivrost360Player
 
         public void InvalidateD3DImage()
         {
-            if (this.RenderTarget != null)
+            if (this.RenderTarget != null && base.PixelWidth > 0 && base.PixelHeight > 0)
             {
                 base.Lock();
                 base.AddDirtyRect(new Int32Rect(0, 0, base.PixelWidth, base.PixelHeight));
@@ -88,11 +88,11 @@ namespace Bivrost.Bivrost360Player
         {
             if (this.RenderTarget != null)
             {
-                this.RenderTarget = null;
-
                 base.Lock();
                 base.SetBackBuffer(D3DResourceType.IDirect3DSurface9, IntPtr.Zero);
                 base.Unlock();
+
+                Disposer.RemoveAndDispose(ref this.RenderTarget);
             }
 
             if (renderTarget == null)
@@ -147,10 +147,10 @@ namespace Bivrost.Bivrost360Player
 
         private IntPtr GetSharedHandle(SharpDX.Direct3D11.Texture2D Texture)
         {
-            SharpDX.DXGI.Resource resource = Texture.QueryInterface<SharpDX.DXGI.Resource>();
-            IntPtr result = resource.SharedHandle;
-            resource.Dispose();
-            return result;
+            using (SharpDX.DXGI.Resource resource = Texture.QueryInterface<SharpDX.DXGI.Resource>())
+            {
+                return resource.SharedHandle;
+            }
         }
 
         private static Format TranslateFormat(SharpDX.Direct3D11.Texture2D Texture)

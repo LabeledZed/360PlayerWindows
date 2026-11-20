@@ -128,7 +128,7 @@ namespace Bivrost.Bivrost360Player.OpenVR
 
 		private static float _copysign(float sizeval, float signval)
 		{
-			return Math.Sign(signval) == 1 ? Math.Abs(sizeval) : -Math.Abs(sizeval);
+			return Math.Sign(signval) >= 0 ? Math.Abs(sizeval) : -Math.Abs(sizeval);
 		}
 
 

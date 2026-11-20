@@ -8,7 +8,7 @@ using System.Threading.Tasks;
 
 namespace LegacyPlayer
 {
-    class TopoBuilder
+    class TopoBuilder : IDisposable
     {
         private Topology topology;
         private MediaSource mediaSource;
@@ -18,6 +18,7 @@ namespace LegacyPlayer
         public void RenderUrl(string fileUrl, IntPtr videoHwnd)
         {
             this.videoHwnd = videoHwnd;
+            ShutdownSource();
             mediaSource = CreateMediaSource(fileUrl);
             CreateTopology();
         }
@@ -25,13 +26,19 @@ namespace LegacyPlayer
         public void RenderUrl2(string fileUrl1, string fileUrl2, IntPtr videoHwnd)
         {
             this.videoHwnd = videoHwnd;
-            var tempSource = CreateMediaSource(fileUrl1);
-            var tempSource2 = CreateMediaSource(fileUrl2);
-            Collection mediaCollection;
-            MediaFactory.CreateCollection(out mediaCollection);
-            mediaCollection.AddElement(tempSource);
-            mediaCollection.AddElement(tempSource2);
-            MediaFactory.CreateAggregateSource(mediaCollection, out mediaSource);
+            ShutdownSource();
+            using (var tempSource = CreateMediaSource(fileUrl1))
+            using (var tempSource2 = CreateMediaSource(fileUrl2))
+            {
+                Collection mediaCollection;
+                MediaFactory.CreateCollection(out mediaCollection);
+                using (mediaCollection)
+                {
+                    mediaCollection.AddElement(tempSource);
+                    mediaCollection.AddElement(tempSource2);
+                    MediaFactory.CreateAggregateSource(mediaCollection, out mediaSource);
+                }
+            }
 
             CreateTopology();
         }
@@ -51,12 +58,22 @@ namespace LegacyPlayer
             }
         }
 
+        public void Dispose()
+        {
+            ShutdownSource();
+            topology?.Dispose();
+            topology = null;
+            videoDisplay?.Dispose();
+            videoDisplay = null;
+        }
+
         private MediaSource CreateMediaSource(string sURL)
         {
-            SourceResolver sourceResolver = new SourceResolver();
-            ComObject comObject;
-            comObject = sourceResolver.CreateObjectFromURL(sURL, SourceResolverFlags.MediaSource | SourceResolverFlags.ContentDoesNotHaveToMatchExtensionOrMimeType);
-            return comObject.QueryInterface<MediaSource>();
+            using (SourceResolver sourceResolver = new SourceResolver())
+            using (ComObject comObject = sourceResolver.CreateObjectFromURL(sURL, SourceResolverFlags.MediaSource | SourceResolverFlags.ContentDoesNotHaveToMatchExtensionOrMimeType))
+            {
+                return comObject.QueryInterface<MediaSource>();
+            }
         }
 
         private void CreateTopology()
@@ -70,16 +87,18 @@ namespace LegacyPlayer
             {
                 PresentationDescriptor presentationDescriptor;
                 mediaSource.CreatePresentationDescriptor(out presentationDescriptor);
-
-                for (int it = 0; it < presentationDescriptor.StreamDescriptorCount; it++)
+                using (presentationDescriptor)
                 {
-                    try
+                    for (int it = 0; it < presentationDescriptor.StreamDescriptorCount; it++)
                     {
-                        AddBranchToPartialTopology(presentationDescriptor, it);
-                    }
-                    catch (Exception exc)
-                    {
-                        presentationDescriptor.DeselectStream(it);
+                        try
+                        {
+                            AddBranchToPartialTopology(presentationDescriptor, it);
+                        }
+                        catch (Exception)
+                        {
+                            presentationDescriptor.DeselectStream(it);
+                        }
                     }
                 }
             }
@@ -90,16 +109,18 @@ namespace LegacyPlayer
             SharpDX.Bool isSelected;
             StreamDescriptor streamDescriptor;
             presentationDescriptor.GetStreamDescriptorByIndex(iStream, out isSelected, out streamDescriptor);
-            if (isSelected)
+            using (streamDescriptor)
             {
-                TopologyNode sourceNode = CreateSourceStreamNode(presentationDescriptor, streamDescriptor);
-                //var resource = videoTexture.QueryInterface<SharpDX.DXGI.Resource>();
-                //var sharedTex = _device.OpenSharedResource<Texture2D>(resource.SharedHandle)
-                TopologyNode outputNode = CreateOutputNode(streamDescriptor, videoHwnd);
-
-                topology.AddNode(sourceNode);
-                topology.AddNode(outputNode);
-                sourceNode.ConnectOutput(0, outputNode, 0);
+                if (isSelected)
+                {
+                    using (TopologyNode sourceNode = CreateSourceStreamNode(presentationDescriptor, streamDescriptor))
+                    using (TopologyNode outputNode = CreateOutputNode(streamDescriptor, videoHwnd))
+                    {
+                        topology.AddNode(sourceNode);
+                        topology.AddNode(outputNode);
+                        sourceNode.ConnectOutput(0, outputNode, 0);
+                    }
+                }
             }
         }
 
@@ -119,18 +140,24 @@ namespace LegacyPlayer
             TopologyNode outputNode;
             Activate rendererActivate;
 
-            if (streamDescriptor.MediaTypeHandler.MajorType == MediaTypeGuids.Audio)
+            using (var handler = streamDescriptor.MediaTypeHandler)
             {
-                MediaFactory.CreateAudioRendererActivate(out rendererActivate);
+                if (handler.MajorType == MediaTypeGuids.Audio)
+                {
+                    MediaFactory.CreateAudioRendererActivate(out rendererActivate);
+                }
+                else if (handler.MajorType == MediaTypeGuids.Video)
+                {
+                    MediaFactory.CreateVideoRendererActivate(hwnd, out rendererActivate);
+                }
+                else throw new Exception("Bad stream");
             }
-            else if (streamDescriptor.MediaTypeHandler.MajorType == MediaTypeGuids.Video)
-            {                
-                MediaFactory.CreateVideoRendererActivate(hwnd, out rendererActivate);
-            }
-            else throw new Exception("Bad stream");
 
-            MediaFactory.CreateTopologyNode(TopologyType.OutputNode, out outputNode);            
-            outputNode.Object = rendererActivate;
+            using (rendererActivate)
+            {
+                MediaFactory.CreateTopologyNode(TopologyType.OutputNode, out outputNode);
+                outputNode.Object = rendererActivate;
+            }
 
             return outputNode;
         }

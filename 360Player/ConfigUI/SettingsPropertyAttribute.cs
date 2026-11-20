@@ -30,6 +30,7 @@ namespace Bivrost.Bivrost360Player.ConfigUI
 		Path,
 		Int,
 		Enum,
-		Action
+		Action,
+		AudioDevice
 	}
 }

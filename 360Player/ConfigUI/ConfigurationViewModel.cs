@@ -52,6 +52,9 @@ namespace Bivrost.Bivrost360Player.ConfigUI
 					case ConfigItemType.Action:
 						TargetCollection.Add(new ButtonConfigItemViewModel(attr, () => { ((System.Action)property.GetValue(settings))(); }));
 						break;
+					case ConfigItemType.AudioDevice:
+						TargetCollection.Add(new AudioDeviceConfigItemViewModel(attr, () => (string)property.GetValue(settings, null), (value) => property.SetValue(settings, value, null)));
+						break;
 				}
 			});
 

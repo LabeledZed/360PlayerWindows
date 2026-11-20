@@ -39,6 +39,10 @@ namespace Bivrost.Bivrost360Player
 			{
 				pause = false;
 				_media = value;
+				if (value != null && value.contentType != ServiceResult.ContentType.none)
+				{
+					FileBrowser.Close();
+				}
 				vrui?.EnqueueUIRedraw();
 				
 				//UpdateSceneSettings(Media.projection, Media.stereoscopy);
@@ -47,8 +51,26 @@ namespace Bivrost.Bivrost360Player
 		//public bool _stereoVideo => Array.IndexOf(new[] { VideoMode.Mono, VideoMode.Autodetect }, Media.stereoscopy) < 0;
 		protected float Duration => (float)MediaDecoder.Instance.Duration;
 
+		public readonly VRFileBrowser FileBrowser = new VRFileBrowser();
 
 		protected Logger log;
+
+
+		private bool _wasBrowserOpen = false;
+
+		public Headset()
+		{
+			FileBrowser.OnChanged += () =>
+			{
+				bool isOpen = FileBrowser.IsOpen;
+				bool justOpened = isOpen && !_wasBrowserOpen;
+				_wasBrowserOpen = isOpen;
+				if (justOpened)
+					vrui?.ShowSeekBar(recenterIfHidden: false, forceRecenter: true);
+				else
+					vrui?.EnqueueUIRedraw();
+			};
+		}
 
 
 		public void Start()
@@ -77,8 +99,7 @@ namespace Bivrost.Bivrost360Player
 				{
 					MediaDecoder.Instance.OnContentChanged -= ContentChanged;
 					Lock = false;
-					_defaultBackgroundTexture?.Dispose();
-					_defaultBackgroundTexture = null;
+					CleanupResources();
 
 					abort = false;
 					pause = false;
@@ -96,15 +117,15 @@ namespace Bivrost.Bivrost360Player
 
 
 
-		bool _playbackLock = false;
+		volatile bool _playbackLock = false;
 		public bool Lock { get { return _playbackLock; } protected set { this._playbackLock = value; } }
 
 		protected object localCritical = new object();
 
 
 		protected ManualResetEvent waitForRendererStop = new ManualResetEvent(false);
-		protected bool abort = false;
-		protected bool pause = false;
+		protected volatile bool abort = false;
+		protected volatile bool pause = false;
 
 		protected float currentTime = 0;
 
@@ -142,13 +163,45 @@ namespace Bivrost.Bivrost360Player
 
 
 		protected VRUI vrui;
+		public const double SeekBarDisplayDurationSeconds = 1.0;
+		public const double VolumeHudDisplayDurationSeconds = 1.5;
+		private long _seekBarVisibleUntilUtcTicks = 0;
+		private long _volumeHudVisibleUntilUtcTicks = 0;
+		private long _statusHudVisibleUntilUtcTicks = 0;
+		protected float currentVolume = 0.5f;
+		protected bool currentVolumeMuted = false;
+		protected string statusHudText = null;
+		protected float statusHudProgress = -1f;
+
+		public bool IsSeekBarActive =>
+			DateTime.UtcNow.Ticks < Interlocked.Read(ref _seekBarVisibleUntilUtcTicks);
+
+		public bool IsVolumeHudActive =>
+			DateTime.UtcNow.Ticks < Interlocked.Read(ref _volumeHudVisibleUntilUtcTicks);
+
+		public bool IsStatusHudActive =>
+			DateTime.UtcNow.Ticks < Interlocked.Read(ref _statusHudVisibleUntilUtcTicks);
+
+		protected bool IsSeekBarOnlyMode =>
+			!pause && !FileBrowser.IsOpen && Media.contentType == ServiceResult.ContentType.video && IsSeekBarActive;
+
+		protected bool IsVolumeBarOnlyMode =>
+			!pause && !FileBrowser.IsOpen && Media.contentType == ServiceResult.ContentType.video && IsVolumeHudActive;
+
+		protected bool IsStatusHudOnlyMode =>
+			!pause && !FileBrowser.IsOpen && Media.contentType == ServiceResult.ContentType.video && IsStatusHudActive;
+
 		protected bool ShouldShowVRUI
 		{
 			get
 			{
+				if (FileBrowser.IsOpen)
+					return true;
+				if (Media.contentType == ServiceResult.ContentType.none)
+					return true;
 				if (Media.contentType != ServiceResult.ContentType.video)
 					return false;
-				return pause;
+				return pause || IsSeekBarActive || IsVolumeHudActive || IsStatusHudActive;
 			}
 		}
 
@@ -158,12 +211,22 @@ namespace Bivrost.Bivrost360Player
 			pause = true;
 		}
 
-		public void UnPause() { pause = false; }
+		public void UnPause()
+		{
+			pause = false;
+			Interlocked.Exchange(ref _seekBarVisibleUntilUtcTicks, 0);
+			Interlocked.Exchange(ref _volumeHudVisibleUntilUtcTicks, 0);
+			Interlocked.Exchange(ref _statusHudVisibleUntilUtcTicks, 0);
+			vrui?.EnqueueUIRedraw();
+		}
 
 		public void Stop()
 		{
 			Media = null;
 			pause = true;
+			Interlocked.Exchange(ref _seekBarVisibleUntilUtcTicks, 0);
+			Interlocked.Exchange(ref _volumeHudVisibleUntilUtcTicks, 0);
+			Interlocked.Exchange(ref _statusHudVisibleUntilUtcTicks, 0);
 			vrui?.EnqueueUIRedraw();
 		}
 
@@ -171,6 +234,77 @@ namespace Bivrost.Bivrost360Player
 		{
 			vrui?.EnqueueUIRedraw();
 			currentTime = time;
+		}
+
+		public void NotifySeek(float time)
+		{
+			currentTime = time;
+			long expiryTicks = DateTime.UtcNow.AddSeconds(SeekBarDisplayDurationSeconds).Ticks;
+			Interlocked.Exchange(ref _seekBarVisibleUntilUtcTicks, expiryTicks);
+			vrui?.ShowSeekBar(recenterIfHidden: true);
+		}
+
+		public void NotifyVolumeChanged(float volume, bool isMuted)
+		{
+			currentVolume = MathUtil.Clamp(volume, 0f, 1f);
+			currentVolumeMuted = isMuted;
+			long expiryTicks = DateTime.UtcNow.AddSeconds(VolumeHudDisplayDurationSeconds).Ticks;
+			Interlocked.Exchange(ref _volumeHudVisibleUntilUtcTicks, expiryTicks);
+			vrui?.ShowSeekBar(recenterIfHidden: true);
+		}
+
+		public void NotifyHoldProgress(string label, float progress)
+		{
+			if (progress <= 0f || string.IsNullOrWhiteSpace(label))
+			{
+				Interlocked.Exchange(ref _statusHudVisibleUntilUtcTicks, 0);
+				statusHudText = null;
+				statusHudProgress = -1f;
+				vrui?.EnqueueUIRedraw();
+				return;
+			}
+
+			statusHudText = label;
+			statusHudProgress = MathUtil.Clamp(progress, 0f, 1f);
+			long expiryTicks = DateTime.UtcNow.AddSeconds(0.35).Ticks;
+			Interlocked.Exchange(ref _statusHudVisibleUntilUtcTicks, expiryTicks);
+			vrui?.ShowSeekBar(recenterIfHidden: true);
+		}
+
+		public void NotifyRecenterProgress(float progress)
+		{
+			NotifyHoldProgress("Hold to Recenter View...", progress);
+		}
+
+		public void NotifyRecenterCompleted()
+		{
+			statusHudText = "View Recentered";
+			statusHudProgress = 1f;
+			long expiryTicks = DateTime.UtcNow.AddSeconds(1.2).Ticks;
+			Interlocked.Exchange(ref _statusHudVisibleUntilUtcTicks, expiryTicks);
+			vrui?.ShowSeekBar(recenterIfHidden: false);
+			vrui?.EnqueueUIRedraw(recenter: true);
+		}
+
+		public void NotifyStatusMessage(string message, double durationSeconds = 1.5)
+		{
+			if (string.IsNullOrWhiteSpace(message))
+				return;
+			statusHudText = message;
+			statusHudProgress = -1f;
+			long expiryTicks = DateTime.UtcNow.AddSeconds(durationSeconds).Ticks;
+			Interlocked.Exchange(ref _statusHudVisibleUntilUtcTicks, expiryTicks);
+			vrui?.ShowSeekBar(recenterIfHidden: true);
+		}
+
+		public virtual void RequestRecenterView()
+		{
+			NotifyRecenterCompleted();
+		}
+
+		public void RefreshUI()
+		{
+			vrui?.EnqueueUIRedraw();
 		}
 
 
@@ -217,12 +351,34 @@ namespace Bivrost.Bivrost360Player
 		}
 
 		
+		SharpDX.Toolkit.Graphics.Texture2D toolkitTextureL;
+		SharpDX.Toolkit.Graphics.Texture2D toolkitTextureR;
+
 		void TextureCleanup()
 		{
+			toolkitTextureL?.Dispose();
+			toolkitTextureR?.Dispose();
+			toolkitTextureL = null;
+			toolkitTextureR = null;
+
 			localBitmapTextureL?.Dispose();
 			localBitmapTextureR?.Dispose();
 			localBitmapTextureL = null;
 			localBitmapTextureR = null;
+		}
+
+		protected void CleanupResources()
+		{
+			lock (localCritical)
+			{
+				TextureCleanup();
+
+				primitive?.Dispose();
+				primitive = null;
+
+				_defaultBackgroundTexture?.Dispose();
+				_defaultBackgroundTexture = null;
+			}
 		}
 
 
@@ -252,7 +408,7 @@ namespace Bivrost.Bivrost360Player
 		}
 
 
-		private bool contentUpdateRequested = true;
+		private volatile bool contentUpdateRequested = true;
 		protected void UpdateContentIfRequested()
 		{
 			if (contentUpdateRequested)
@@ -293,7 +449,8 @@ namespace Bivrost.Bivrost360Player
 				using (var resourceL = textureL.QueryInterface<SharpDX.DXGI.Resource>())
 				using (var sharedTexL = _device.OpenSharedResource<Texture2D>(resourceL.SharedHandle))
 				{
-					customEffectL.Parameters["UserTex"].SetResource(SharpDX.Toolkit.Graphics.Texture2D.New(_gd, sharedTexL));
+					toolkitTextureL = SharpDX.Toolkit.Graphics.Texture2D.New(_gd, sharedTexL);
+					customEffectL.Parameters["UserTex"].SetResource(toolkitTextureL);
 					customEffectL.Parameters["gammaFactor"].SetValue(Gamma);
 					customEffectL.CurrentTechnique = customEffectL.Techniques["ColorTechnique"];
 					customEffectL.CurrentTechnique.Passes[0].Apply();
@@ -302,7 +459,8 @@ namespace Bivrost.Bivrost360Player
 				using (var resourceR = (textureR ?? textureL).QueryInterface<SharpDX.DXGI.Resource>())
 				using (var sharedTexR = _device.OpenSharedResource<Texture2D>(resourceR.SharedHandle))
 				{
-					customEffectR.Parameters["UserTex"].SetResource(SharpDX.Toolkit.Graphics.Texture2D.New(_gd, sharedTexR));
+					toolkitTextureR = SharpDX.Toolkit.Graphics.Texture2D.New(_gd, sharedTexR);
+					customEffectR.Parameters["UserTex"].SetResource(toolkitTextureR);
 					customEffectR.Parameters["gammaFactor"].SetValue(Gamma);
 					customEffectR.CurrentTechnique = customEffectR.Techniques["ColorTechnique"];
 					customEffectR.CurrentTechnique.Passes[0].Apply();
@@ -328,27 +486,31 @@ namespace Bivrost.Bivrost360Player
 				ImageLockMode.ReadOnly,
 				PixelFormat.Format32bppRgb
 			);
-			DataRectangle dataRect = new DataRectangle(data.Scan0, data.Stride);
-			var tex = new Texture2D(
-				_device,
-				new Texture2DDescription()
-				{
-					Width = rect.Width,
-					Height = rect.Height,
-					MipLevels = 1,
-					ArraySize = 1,
-					Format = SharpDX.DXGI.Format.B8G8R8X8_UNorm,
-					Usage = ResourceUsage.Default,
-					SampleDescription = new SharpDX.DXGI.SampleDescription(1, 0),
-					BindFlags = /*BindFlags.RenderTarget |*/ BindFlags.ShaderResource,
-					CpuAccessFlags = CpuAccessFlags.None,
-					OptionFlags = ResourceOptionFlags.Shared
-				},
-				dataRect
-			);
-			bitmap.UnlockBits(data);
-
-			return tex;
+			try
+			{
+				DataRectangle dataRect = new DataRectangle(data.Scan0, data.Stride);
+				return new Texture2D(
+					_device,
+					new Texture2DDescription()
+					{
+						Width = rect.Width,
+						Height = rect.Height,
+						MipLevels = 1,
+						ArraySize = 1,
+						Format = SharpDX.DXGI.Format.B8G8R8X8_UNorm,
+						Usage = ResourceUsage.Default,
+						SampleDescription = new SharpDX.DXGI.SampleDescription(1, 0),
+						BindFlags = /*BindFlags.RenderTarget |*/ BindFlags.ShaderResource,
+						CpuAccessFlags = CpuAccessFlags.None,
+						OptionFlags = ResourceOptionFlags.Shared
+					},
+					dataRect
+				);
+			}
+			finally
+			{
+				bitmap.UnlockBits(data);
+			}
 		}
 
 		void IContentUpdatableFromMediaEngine.ReceiveBitmap(Bitmap bitmap, MediaDecoder.ClipCoords texL, MediaDecoder.ClipCoords texR)
@@ -366,7 +528,8 @@ namespace Bivrost.Bivrost360Player
 				using (var resourceL = localBitmapTextureL.QueryInterface<SharpDX.DXGI.Resource>())
 				using (var sharedTexL = _device.OpenSharedResource<Texture2D>(resourceL.SharedHandle))
 				{
-					customEffectL.Parameters["UserTex"].SetResource(SharpDX.Toolkit.Graphics.Texture2D.New(_gd, sharedTexL));
+					toolkitTextureL = SharpDX.Toolkit.Graphics.Texture2D.New(_gd, sharedTexL);
+					customEffectL.Parameters["UserTex"].SetResource(toolkitTextureL);
 					customEffectL.Parameters["gammaFactor"].SetValue(Gamma);
 					customEffectL.CurrentTechnique = customEffectL.Techniques["ColorTechnique"];
 					customEffectL.CurrentTechnique.Passes[0].Apply();
@@ -375,7 +538,8 @@ namespace Bivrost.Bivrost360Player
 				using (var resourceR = (localBitmapTextureR ?? localBitmapTextureL).QueryInterface<SharpDX.DXGI.Resource>())
 				using (var sharedTexR = _device.OpenSharedResource<Texture2D>(resourceR.SharedHandle))
 				{
-					customEffectR.Parameters["UserTex"].SetResource(SharpDX.Toolkit.Graphics.Texture2D.New(_gd, sharedTexR));
+					toolkitTextureR = SharpDX.Toolkit.Graphics.Texture2D.New(_gd, sharedTexR);
+					customEffectR.Parameters["UserTex"].SetResource(toolkitTextureR);
 					customEffectR.Parameters["gammaFactor"].SetValue(Gamma);
 					customEffectR.CurrentTechnique = customEffectR.Techniques["ColorTechnique"];
 					customEffectR.CurrentTechnique.Passes[0].Apply();

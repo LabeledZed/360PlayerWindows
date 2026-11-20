@@ -8,7 +8,7 @@
              mc:Ignorable="d" 
              d:DesignHeight="22" d:DesignWidth="300" HorizontalAlignment="Stretch">
     <StackPanel Orientation="Horizontal">
-        <CheckBox IsChecked="{Binding Value}" Margin="8,2,4,2" VerticalAlignment="Center"/>
+        <CheckBox IsChecked="{Binding Value}" IsEnabled="{Binding Enabled}" Margin="8,2,4,2" VerticalAlignment="Center"/>
         <TextBlock x:Name="DisplayName" Text="Path option display name" Margin="4,2,8,2" VerticalAlignment="Center" IsEnabled="{Binding Enabled}"
 				   cal:Message.Attach="[Event PreviewMouseDown] = [Action ToggleValue]"/>
     </StackPanel>

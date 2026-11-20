@@ -36,9 +36,11 @@ namespace Bivrost.Bivrost360Player
 	public enum ProjectionMode
 	{
 		Autodetect,
-		Sphere, // Equirectangular 360x180
-		CubeFacebook,
-		Dome    // Equirectangular 180x180
+		Sphere,       // Equirectangular 360x180
+		CubeFacebook, // Facebook 3x2 Cubemap
+		Dome,         // Equirectangular 180x180 (VR180 / 180 SBS / _LR / _TB)
+		Fisheye180,   // Fisheye / Dual-Fisheye 180° (SBS / TB / Mono)
+		Mesh180       // Mesh-Projected 180° SBS (VR180 Equi-Angular / Mesh Projection)
 	}
 
 
@@ -57,12 +59,13 @@ namespace Bivrost.Bivrost360Player
 
 		private MediaEngine _mediaEngine;
 		private MediaEngineEx _mediaEngineEx;
-		private object criticalSection = new object();
-		private bool waitForFormatChange = false;
-		private bool formatChangePending = false;
+		private readonly object criticalSection = new object();
+		private volatile bool waitForFormatChange = false;
+		private volatile bool formatChangePending = false;
+		private bool mediaManagerStarted = false;
 
 		private long ts;
-		private bool manualRender = false;
+		private volatile bool manualRender = false;
 
 		private Texture2D _textureL;
 		private Texture2D _textureR;
@@ -78,7 +81,7 @@ namespace Bivrost.Bivrost360Player
 		}
 
 		public bool IsPlaying => isPlaying || IsDisplayingStaticContent;
-		private bool isPlaying;
+		private volatile bool isPlaying;
 		public bool IsPaused {
             get
             {
@@ -119,7 +122,11 @@ namespace Bivrost.Bivrost360Player
 			get { return _loop; }
 			set {
 				_loop = value;
-				if (_initialized) _mediaEngineEx.Loop = _loop;
+				lock (criticalSection)
+				{
+					if (_initialized && _mediaEngineEx != null)
+						_mediaEngineEx.Loop = _loop;
+				}
 			}
 		}
 
@@ -127,9 +134,16 @@ namespace Bivrost.Bivrost360Player
 		{
 			get
 			{
-				lock (criticalSection)
+				if (!_initialized) return false;
+				var engineEx = _mediaEngineEx;
+				if (engineEx == null) return false;
+				try
 				{
-					return _initialized ? (bool)_mediaEngineEx.IsEnded : false;
+					return (bool)engineEx.IsEnded;
+				}
+				catch (Exception)
+				{
+					return false;
 				}
 			}
 		}
@@ -150,9 +164,26 @@ namespace Bivrost.Bivrost360Player
 
 		public double CurrentPosition { get; protected set; } = 0; // _mediaEngineEx.CurrentTime; 
 		public bool Initialized { get { return _initialized; } }
-		private VideoMode LoadedStereoMode { get; set; } = VideoMode.Autodetect;
+		private VideoMode LoadedStereoMode { get; set; } = VideoMode.SideBySide;
+		private int _lastMediaWidth = 0;
+		private int _lastMediaHeight = 0;
+		private long _pendingSeekTargetBits = BitConverter.DoubleToInt64Bits(-1.0);
+		private long _lastSeekUtcTicks = 0;
+		private volatile bool _hasPendingSeek = false;
+		private volatile string _audioEndpointId = null;
 
-		private VideoMode _currentMode;
+		public VideoMode StereoMode
+		{
+			get { return LoadedStereoMode; }
+			set
+			{
+				if (LoadedStereoMode == value) return;
+				LoadedStereoMode = value;
+				ApplyStereoModeChange();
+			}
+		}
+
+		private VideoMode _currentMode = VideoMode.SideBySide;
 		public VideoMode CurrentMode
 		{
 			get { return _currentMode; }
@@ -166,14 +197,82 @@ namespace Bivrost.Bivrost360Player
 		}
 
 
-		private ProjectionMode _projection = ProjectionMode.Autodetect;
+		private ProjectionMode _projection = ProjectionMode.Dome;
 		public ProjectionMode Projection
 		{
 			get => _projection;
 			set
 			{
+				if (_projection == value) return;
 				_projection = value;
+				if (LoadedStereoMode == VideoMode.Autodetect)
+				{
+					ApplyStereoModeChange();
+				}
 				OnContentChanged?.Invoke(); // no need for a critical section
+			}
+		}
+
+		public ProjectionMode EffectiveProjection =>
+			ResolveProjection(Projection, CurrentMode, _lastMediaWidth, _lastMediaHeight);
+
+		public ProjectionMode ResolveProjection(ProjectionMode requestedProjection, VideoMode stereoMode, float w, float h)
+		{
+			if (requestedProjection != ProjectionMode.Autodetect)
+				return requestedProjection;
+
+			if (CurrentServiceResult != null && CurrentServiceResult.projection != ProjectionMode.Autodetect)
+				return CurrentServiceResult.projection;
+
+			// 360° Side-by-Side has a ~4:1 full-frame aspect ratio (two 2:1 spheres side by side)
+			if ((stereoMode == VideoMode.SideBySide || stereoMode == VideoMode.SideBySideReversed) && w > 0 && h > 0)
+			{
+				float aspect = w / h;
+				if (aspect >= 3.2f)
+					return ProjectionMode.Sphere;
+			}
+
+			// 360° Top-Bottom has a ~1:1 full-frame aspect ratio (two 2:1 spheres stacked vertically)
+			if ((stereoMode == VideoMode.TopBottom || stereoMode == VideoMode.TopBottomReversed) && w > 0 && h > 0)
+			{
+				float aspect = w / h;
+				if (aspect >= 0.85f && aspect <= 1.3f)
+					return ProjectionMode.Sphere;
+			}
+
+			// Default to 180° Equirectangular (_LR / Dome)
+			return ProjectionMode.Dome;
+		}
+
+		private void ApplyStereoModeChange()
+		{
+			lock (criticalSection)
+			{
+				if (IsDisplayingStaticContent && bitmap != null)
+				{
+					var w = bitmap.Width;
+					var h = bitmap.Height;
+					_lastMediaWidth = w;
+					_lastMediaHeight = h;
+					CurrentMode = ParseStereoMode(LoadedStereoMode, w, h);
+					ClipCoords texL, texR;
+					GetTextureClipCoordinates(CurrentMode, out texL, out texR);
+					ContentChanged(renderer =>
+					{
+						if (bitmap != null)
+							renderer.ReceiveBitmap(bitmap, texL, texR);
+					});
+				}
+				else if (_initialized && _mediaEngineEx != null)
+				{
+					formatChangePending = true;
+					manualRender = true;
+				}
+				else
+				{
+					CurrentMode = ParseStereoMode(LoadedStereoMode, _lastMediaWidth, _lastMediaHeight);
+					OnContentChanged?.Invoke();
+				}
 			}
 		}
 
@@ -185,8 +284,8 @@ namespace Bivrost.Bivrost360Player
 		}
 
 
-		private bool _initialized = false;
-		private bool _rendering = false;
+		private volatile bool _initialized = false;
+		private volatile bool _rendering = false;
 		private ManualResetEvent waitForRenderingEnd = new ManualResetEvent(false);
 
 		private static MediaDecoder _instance = null;
@@ -205,6 +304,7 @@ namespace Bivrost.Bivrost360Player
 		public event Action<Error> OnError = delegate { };
 		public event Action OnAbort = delegate { };
 		public event Action<double> OnTimeUpdate = delegate { };
+		public event Action<double> OnSeek = delegate { };
 		public event Action OnBufferingStarted = delegate { };
 		public event Action OnBufferingEnded = delegate { };
 		public event Action<double> OnProgress = delegate { };
@@ -245,7 +345,7 @@ namespace Bivrost.Bivrost360Player
 		#endregion
 
 
-		private bool textureReleased = true;
+		private volatile bool textureReleased = true;
 		public bool TextureReleased { get { return textureReleased; } }
 
 
@@ -261,12 +361,10 @@ namespace Bivrost.Bivrost360Player
 			_factory = new SharpDX.DXGI.Factory();
 			_device = new SharpDX.Direct3D11.Device(SharpDX.Direct3D.DriverType.Hardware, DeviceCreationFlags.BgraSupport | DeviceCreationFlags.VideoSupport, _levels);
 
-			//SharpDX.DXGI.Device1 dxdevice = _device.QueryInterface<SharpDX.DXGI.Device1>();
-			//MessageBox.Show(dxdevice.Adapter.Description.Description);
-			//dxdevice.Dispose();
-
-			DeviceMultithread mt = _device.QueryInterface<DeviceMultithread>();
-			mt.SetMultithreadProtected(true);
+			using (DeviceMultithread mt = _device.QueryInterface<DeviceMultithread>())
+			{
+				mt.SetMultithreadProtected(true);
+			}
 
 			using (SharpDX.DXGI.Device1 dxgiDevice = _device.QueryInterface<SharpDX.DXGI.Device1>())
 			{
@@ -274,29 +372,19 @@ namespace Bivrost.Bivrost360Player
 			}
 
 			_dxgiManager = new DXGIDeviceManager();
-
-			//MFTEnumEx 
-			//var category = SharpDX.MediaFoundation.TransformCategoryGuids.VideoDecoder;
-			//var flags = SharpDX.MediaFoundation.TransformEnumFlag.Hardware | TransformEnumFlag.Localmft | TransformEnumFlag.SortAndFilter;
-			//var typeInfo = new SharpDX.MediaFoundation.TRegisterTypeInformation();
-			//typeInfo.GuidMajorType = MediaTypeGuids.Video;
-			//typeInfo.GuidSubtype = VideoFormatGuids.H264;
-
-			//Guid[] guids = new Guid[50];
-			//int costamref;
-			//MediaFactory.TEnum(category, (int)flags, null, null, null, guids, out costamref);
-			//;			
 		}
 
 
 		public static string[] SupportedVideoFileExtensions => new string[] { "mp4", "m4v", "mov", "avi", "wmv" };
-		public static string[] SupportedImageFileExtensions => new string[] { "png", "jpg", "jpeg", "png", "jpg", "jpeg" };
+		public static string[] SupportedImageFileExtensions => new string[] { "png", "jpg", "jpeg" };
 		public static string[] SupportedFileExtensions => SupportedVideoFileExtensions.Concat(SupportedImageFileExtensions).ToArray();
 
 
 		public static bool CheckExtension(string extension)
 		{
-			string e = extension.TrimStart(new char[] { '.' });
+			if (string.IsNullOrWhiteSpace(extension))
+				return false;
+			string e = extension.TrimStart('.').ToLowerInvariant();
 			return SupportedVideoFileExtensions.Contains(e) || SupportedImageFileExtensions.Contains(e);
 		}
 
@@ -312,22 +400,30 @@ namespace Bivrost.Bivrost360Player
 		public void Init()
 		{
 			LastError = null;
-			criticalSection = new object();
 			lock(criticalSection)
 			{
 				if (_initialized) return;
 
-				MediaManager.Startup();
-				var mediaEngineFactory = new MediaEngineClassFactory();
+				if (!mediaManagerStarted)
+				{
+					MediaManager.Startup();
+					mediaManagerStarted = true;
+				}
+				using (var mediaEngineFactory = new MediaEngineClassFactory())
+				using (MediaEngineAttributes attr = new MediaEngineAttributes())
+				{
+					_dxgiManager.ResetDevice(_device);
 
-				_dxgiManager.ResetDevice(_device);
+					attr.VideoOutputFormat = (int)SharpDX.DXGI.Format.B8G8R8A8_UNorm;
+					attr.DxgiManager = _dxgiManager;
 
-				MediaEngineAttributes attr = new MediaEngineAttributes();
-				attr.VideoOutputFormat = (int)SharpDX.DXGI.Format.B8G8R8A8_UNorm;
-				attr.DxgiManager = _dxgiManager;
-				//attr.Set(MediaTypeAttributeKeys.TransferFunction.Guid, VideoTransferFunction.Func10);
+					_mediaEngine = new MediaEngine(mediaEngineFactory, attr, MediaEngineCreateFlags.None);
+				}
 
-				_mediaEngine = new MediaEngine(mediaEngineFactory, attr, MediaEngineCreateFlags.None);
+				if (!string.IsNullOrWhiteSpace(_audioEndpointId))
+				{
+					Tools.AudioDeviceManager.ApplyEndpointToMediaEngine(_mediaEngine.NativePointer, _audioEndpointId);
+				}
 
 				_mediaEngine.PlaybackEvent += (playEvent, param1, param2) =>
 				{
@@ -345,8 +441,60 @@ namespace Bivrost.Bivrost360Player
 							break;
 
 						case MediaEngineEvent.TimeUpdate:
-							CurrentPosition = _mediaEngineEx.CurrentTime;
-							OnTimeUpdate(_mediaEngineEx.CurrentTime);
+							var engineForTime = _mediaEngineEx;
+							if (engineForTime == null || !_initialized || !isPlaying)
+								break;
+
+							double engineTime;
+							try
+							{
+								engineTime = engineForTime.CurrentTime;
+							}
+							catch (Exception)
+							{
+								break;
+							}
+
+							if (_hasPendingSeek)
+							{
+								long elapsedTicks = DateTime.UtcNow.Ticks - Interlocked.Read(ref _lastSeekUtcTicks);
+								double pendingTarget = BitConverter.Int64BitsToDouble(Interlocked.Read(ref _pendingSeekTargetBits));
+								bool recentlySought = elapsedTicks < TimeSpan.FromMilliseconds(1000).Ticks;
+								if (recentlySought && pendingTarget >= 0.0 && Math.Abs(engineTime - pendingTarget) > 1.5)
+								{
+									// Ignore stale pre-seek or intermediate TimeUpdate while a rapid multi-seek is catching up
+									break;
+								}
+								_hasPendingSeek = false;
+							}
+
+							CurrentPosition = engineTime;
+							OnTimeUpdate(engineTime);
+							break;
+
+						case MediaEngineEvent.Seeked:
+							var engineForSeek = _mediaEngineEx;
+							if (engineForSeek != null && _initialized && isPlaying)
+							{
+								try
+								{
+									double currentEngineTime = engineForSeek.CurrentTime;
+									double pendingTarget = BitConverter.Int64BitsToDouble(Interlocked.Read(ref _pendingSeekTargetBits));
+									long elapsedTicks = DateTime.UtcNow.Ticks - Interlocked.Read(ref _lastSeekUtcTicks);
+									if (_hasPendingSeek && pendingTarget >= 0.0 &&
+										elapsedTicks < TimeSpan.FromSeconds(2.0).Ticks &&
+										Math.Abs(currentEngineTime - pendingTarget) > 1.0)
+									{
+										engineForSeek.CurrentTime = pendingTarget;
+									}
+									else
+									{
+										_hasPendingSeek = false;
+									}
+								}
+								catch (Exception) { }
+								manualRender = true;
+							}
 							break;
 
 						case MediaEngineEvent.Error:
@@ -388,9 +536,8 @@ namespace Bivrost.Bivrost360Player
 
 				_mediaEngineEx = _mediaEngine.QueryInterface<MediaEngineEx>();
 				_mediaEngineEx.EnableWindowlessSwapchainMode(true);
+				_mediaEngineEx.Loop = _loop;
 
-
-				mediaEngineFactory.Dispose();
 				_initialized = true;
 			}
 		}
@@ -579,50 +726,77 @@ namespace Bivrost.Bivrost360Player
 				int w = -1, h = -1;
 				while (_mediaEngine != null && isPlaying)
 				{
+					bool shouldSleep = false;
 					lock (criticalSection)
 					{
-						if(w < 0 || h < 0 || formatChangePending)
-							_mediaEngineEx.GetNativeVideoSize(out w, out h);
+						if (_mediaEngine == null || _mediaEngineEx == null || !isPlaying)
+							break;
 
-						if(formatChangePending)
+						if(w <= 0 || h <= 0 || formatChangePending)
+						{
+							_mediaEngineEx.GetNativeVideoSize(out w, out h);
+							if (w > 0 && h > 0)
+							{
+								_lastMediaWidth = w;
+								_lastMediaHeight = h;
+							}
+						}
+
+						if(formatChangePending && w > 0 && h > 0)
 						{
 							formatChangePending = false;
 							CurrentMode = ParseStereoMode(LoadedStereoMode, w, h);
 							ChangeFormat(CurrentMode, w, h);
 						}
 
-						if(!textureReleased)
-						if (!_mediaEngine.IsPaused || manualRender)
+						if(!textureReleased && w > 0 && h > 0)
 						{
-							manualRender = false;
-							//waitForResize.WaitOne();
-							if(formatCounter == 0)
-								Console.WriteLine("[!!!] Render " + formatCounter++);
-							long lastTs = ts;
-							bool result = _mediaEngine.OnVideoStreamTick(out ts);
-								if (!result || ts <= 0) Thread.Sleep(1);
-							if(ts > 0)
-							if (result && ts != lastTs)
+							if (!_mediaEngine.IsPaused || manualRender)
 							{
-								//Duration = _mediaEngineEx.Duration;
-								//CurrentPosition = _mediaEngineEx.CurrentTime; 
-
-								try {
-									ClipCoords texL;
-									ClipCoords texR;
-									GetTextureClipCoordinates(CurrentMode, out texL, out texR);
-
-									_mediaEngine.TransferVideoFrame(TextureL, texL.NormalizedSrcRect, texL.DstRect(w,h), null);
-									if(texR != null)
-										_mediaEngine.TransferVideoFrame(TextureR, texR.NormalizedSrcRect, texR.DstRect(w,h), null);
-								}
-								catch (Exception exc)
+								if(formatCounter == 0)
+									Console.WriteLine("[!!!] Render " + formatCounter++);
+								long lastTs = ts;
+								bool forceRender = manualRender;
+								bool result = _mediaEngine.OnVideoStreamTick(out ts);
+								if ((!result || ts < 0) && !forceRender)
 								{
-									log.Error(exc, "Playback exception");
+									shouldSleep = true;
+								}
+								else if (ts != lastTs || forceRender)
+								{
+									manualRender = false;
+									try {
+										ClipCoords texL;
+										ClipCoords texR;
+										GetTextureClipCoordinates(CurrentMode, out texL, out texR);
+
+										_mediaEngine.TransferVideoFrame(TextureL, texL.NormalizedSrcRect, texL.DstRect(w,h), null);
+										if(texR != null)
+											_mediaEngine.TransferVideoFrame(TextureR, texR.NormalizedSrcRect, texR.DstRect(w,h), null);
+									}
+									catch (Exception exc)
+									{
+										log.Error(exc, "Playback exception");
+									}
+								}
+								else
+								{
+									shouldSleep = true;
 								}
 							}
-						} else Thread.Sleep(1);
+							else
+							{
+								shouldSleep = true;
+							}
+						}
+						else
+						{
+							shouldSleep = true;
+						}
 					}
+
+					if (shouldSleep)
+						Thread.Sleep(1);
 				}
 
 				waitForRenderingEnd.Set();
@@ -635,8 +809,11 @@ namespace Bivrost.Bivrost360Player
 		{
 			if (setStereoMode == VideoMode.Autodetect)
 			{
-				float videoAspect = w/h;
-				var mode = (videoAspect < 1.3) ? VideoMode.TopBottom : VideoMode.Mono;
+				if (w <= 0 || h <= 0)
+					return VideoMode.SideBySide;
+
+				float videoAspect = w / h;
+				VideoMode mode = (videoAspect < 1.3f) ? VideoMode.TopBottom : VideoMode.SideBySide;
 				log.Info($"Autodetected stereoscopy={mode} ({w}x{h}, aspect={videoAspect})");
 				return mode;
 			}
@@ -664,9 +841,7 @@ namespace Bivrost.Bivrost360Player
 				}
 
 				contentChangeDelegate(obj);
-				var proj = Projection;
-				if (proj == ProjectionMode.Autodetect)
-					proj = ProjectionMode.Sphere;
+				var proj = ResolveProjection(Projection, CurrentMode, _lastMediaWidth, _lastMediaHeight);
 				obj.SetProjection(proj);
 			}
 
@@ -731,12 +906,17 @@ namespace Bivrost.Bivrost360Player
 		public void Pause()
 		{
 			if (IsDisplayingStaticContent) return;
-			if(isPlaying)
+			if (isPlaying)
 			{
-				lock (criticalSection)
+				var engine = _mediaEngine;
+				if (engine != null)
 				{
-					if (!_mediaEngine.IsPaused)
-						_mediaEngine.Pause();
+					try
+					{
+						if (!engine.IsPaused)
+							engine.Pause();
+					}
+					catch (Exception) { }
 				}
 			}
 		}
@@ -746,10 +926,15 @@ namespace Bivrost.Bivrost360Player
 			if (IsDisplayingStaticContent) return;
 			if (isPlaying)
 			{
-				lock (criticalSection)
+				var engine = _mediaEngine;
+				if (engine != null)
 				{
-					if (_mediaEngine.IsPaused)
-						_mediaEngine.Play();
+					try
+					{
+						if (engine.IsPaused)
+							engine.Play();
+					}
+					catch (Exception) { }
 				}
 			}
 		}
@@ -761,6 +946,16 @@ namespace Bivrost.Bivrost360Player
 			{
 				if (IsPaused) Unpause();
 				else Pause();
+			}
+		}
+
+		public void SetAudioOutputEndpoint(string endpointId)
+		{
+			_audioEndpointId = string.IsNullOrWhiteSpace(endpointId) ? null : endpointId;
+			var engine = _mediaEngine;
+			if (engine != null && !engine.IsDisposed)
+			{
+				Tools.AudioDeviceManager.ApplyEndpointToMediaEngine(engine.NativePointer, _audioEndpointId);
 			}
 		}
 
@@ -780,30 +975,64 @@ namespace Bivrost.Bivrost360Player
 			//}
 		}
 
+		public static double ClampSeekTime(double time, double duration)
+		{
+			if (double.IsNaN(time) || double.IsInfinity(time))
+				return 0.0;
+			if (time < 0.0)
+				time = 0.0;
+			if (!double.IsNaN(duration) && !double.IsInfinity(duration) && duration > 0.0 && time > duration)
+				time = duration;
+			return time;
+		}
+
+		public double SeekRelative(double deltaSeconds)
+		{
+			if (IsDisplayingStaticContent || double.IsNaN(deltaSeconds) || double.IsInfinity(deltaSeconds))
+				return CurrentPosition;
+
+			double pendingTarget = BitConverter.Int64BitsToDouble(Interlocked.Read(ref _pendingSeekTargetBits));
+			double baseTime = (_hasPendingSeek && pendingTarget >= 0.0) ? pendingTarget : CurrentPosition;
+			double target = ClampSeekTime(baseTime + deltaSeconds, Duration);
+			Seek(target);
+			return CurrentPosition;
+		}
+
 		public void Seek(double time)
 		{
 			if (IsDisplayingStaticContent) return;
+			if (double.IsNaN(time) || double.IsInfinity(time)) return;
 			if (isPlaying)
 			{
-				lock (criticalSection)
-				{	
-					if (!_mediaEngineEx.IsSeeking)
-					{
-						_mediaEngineEx.CurrentTime = time;
-                        ShellViewModel.SendEvent("movieSeek", time);
-                        if (IsPaused)
-						{
-							manualRender = true;
-						}
-					}
+				var engineEx = _mediaEngineEx;
+				if (engineEx == null || !_initialized)
+					return;
+
+				double clampedTime = ClampSeekTime(time, Duration);
+				CurrentPosition = clampedTime;
+				Interlocked.Exchange(ref _pendingSeekTargetBits, BitConverter.DoubleToInt64Bits(clampedTime));
+				Interlocked.Exchange(ref _lastSeekUtcTicks, DateTime.UtcNow.Ticks);
+				_hasPendingSeek = true;
+				manualRender = true;
+
+				try
+				{
+					// Seek immediately without locking criticalSection or waiting for IsSeeking / buffering
+					engineEx.CurrentTime = clampedTime;
 				}
+				catch (Exception)
+				{
+				}
+
+				ShellViewModel.SendEvent("movieSeek", clampedTime);
+				OnSeek?.Invoke(clampedTime);
+				OnTimeUpdate?.Invoke(clampedTime);
 			}
 		}
 		
 		public void Stop(bool force = false)
 		{
 			textureReleased = true;
-			//OnReleaseTexture();			
 
 			if (!force && !IsDisplayingStaticContent)
 			{
@@ -815,25 +1044,30 @@ namespace Bivrost.Bivrost360Player
 			isPlaying = false;
 			
 			if (_rendering) {
-
 				waitForRenderingEnd.WaitOne(1000);
 			}
 
 			Ready = false;
 
-			lock (criticalSection)
+			bool lockTaken = false;
+			try
 			{
-				if (_mediaEngineEx != null)
+				Monitor.TryEnter(criticalSection, force ? 500 : Timeout.Infinite, ref lockTaken);
+				var engineEx = _mediaEngineEx;
+				var engine = _mediaEngine;
+				_mediaEngineEx = null;
+				_mediaEngine = null;
+
+				if (engineEx != null)
 				{
 					try
 					{
-						_mediaEngineEx.Shutdown();
-						_mediaEngineEx.Dispose();
-						_mediaEngine.Dispose();
+						engineEx.Shutdown();
+						engineEx.Dispose();
+						engine?.Dispose();
 					}
-					catch (Exception e)
+					catch (Exception)
 					{
-						;
 					}
 				}
 
@@ -846,14 +1080,19 @@ namespace Bivrost.Bivrost360Player
 				TextureL = null;
 				TextureR = null;
 
-				//CurrentServiceResult = null;
-				//Projection = ProjectionMode.Autodetect;
-				//LoadedStereoMode = VideoMode.Autodetect;
 				_newFileIsPlayingReported = false;
 
-				ContentChanged(r => r.ClearContent());
+				if (lockTaken)
+				{
+					ContentChanged(r => r.ClearContent());
+				}
 
-				_initialized = false;	
+				_initialized = false;
+			}
+			finally
+			{
+				if (lockTaken)
+					Monitor.Exit(criticalSection);
 			}
 
             OnStop?.Invoke();
@@ -865,8 +1104,13 @@ namespace Bivrost.Bivrost360Player
 		public void LoadMedia(ServiceResult serviceResult)
 		{
 			CurrentServiceResult = serviceResult;
-			Projection = serviceResult.projection;
+			_lastMediaWidth = 0;
+			_lastMediaHeight = 0;
+			Interlocked.Exchange(ref _pendingSeekTargetBits, BitConverter.DoubleToInt64Bits(-1.0));
+			Interlocked.Exchange(ref _lastSeekUtcTicks, 0);
+			_hasPendingSeek = false;
 			LoadedStereoMode = serviceResult.stereoscopy;
+			Projection = serviceResult.projection;
 
 			string fileName = serviceResult.BestSupportedStream;
 
@@ -914,12 +1158,6 @@ namespace Bivrost.Bivrost360Player
 
 							log.Info("Loading remote image file via HTTP: " + fileName);
 
-							if ((int)response.StatusCode < 200 || (int)response.StatusCode >= 400) {
-								log.Error($"Bad HTTP status: {response.StatusCode} ({(int)response.StatusCode})");
-								OnError(new Error() { major = (long)MediaEngineErr.Network });
-								return;
-							}
-
 							if (response.ErrorException != null)
 							{
 								log.Error(response.ErrorException, "Error while downloading");
@@ -927,7 +1165,19 @@ namespace Bivrost.Bivrost360Player
 								return;
 							}
 
+							if ((int)response.StatusCode < 200 || (int)response.StatusCode >= 400) {
+								log.Error($"Bad HTTP status: {response.StatusCode} ({(int)response.StatusCode})");
+								OnError(new Error() { major = (long)MediaEngineErr.Network });
+								return;
+							}
+
 							contentSource = response.RawBytes;
+							if (contentSource == null || contentSource.Length == 0)
+							{
+								log.Error("Downloaded image content is empty");
+								OnError(new Error() { major = (long)MediaEngineErr.Network });
+								return;
+							}
 						}
 						else
 						{
@@ -950,8 +1200,10 @@ namespace Bivrost.Bivrost360Player
 							{
 								bitmap?.Dispose();
 								using (var stream = new MemoryStream(contentSource))
+								using (var decoded = new Bitmap(stream))
 								{
-									bitmap = new Bitmap(stream);
+									// Clone so the bitmap does not depend on the disposed MemoryStream
+									bitmap = new Bitmap(decoded);
 								}
 							}
 						}
@@ -973,6 +1225,8 @@ namespace Bivrost.Bivrost360Player
 
 							var w = bitmap.Width;
 							var h = bitmap.Height;
+							_lastMediaWidth = w;
+							_lastMediaHeight = h;
 							log.Info($"Loaded image of size {w}x{h} from {fileName}");
 							CurrentMode = ParseStereoMode(LoadedStereoMode, w, h);
 
@@ -998,10 +1252,18 @@ namespace Bivrost.Bivrost360Player
 
 		public void Shutdown()
 		{
-			MediaManager.Shutdown();
-			_dxgiManager.Dispose();
-			_factory.Dispose();
-			_device.Dispose();
+			Stop(true);
+			if (mediaManagerStarted)
+			{
+				MediaManager.Shutdown();
+				mediaManagerStarted = false;
+			}
+			_dxgiManager?.Dispose();
+			_dxgiManager = null;
+			_factory?.Dispose();
+			_factory = null;
+			_device?.Dispose();
+			_device = null;
 		}
 
 	}

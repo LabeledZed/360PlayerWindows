@@ -85,8 +85,13 @@ namespace Bivrost.Bivrost360Player.OpenVR
 			Valve.VR.OpenVR.Init(ref initError);
 			if (initError != EVRInitError.None)
 				throw new Exception("OpenVR init error " + initError + ": " + Valve.VR.OpenVR.GetStringForHmdError(initError));
-			CVRSystem hmd = Valve.VR.OpenVR.System;
-			CVRCompositor compositor = Valve.VR.OpenVR.Compositor;
+
+			try
+			{
+				CVRSystem hmd = Valve.VR.OpenVR.System;
+				CVRCompositor compositor = Valve.VR.OpenVR.Compositor;
+				if (hmd == null || compositor == null)
+					throw new HeadsetError("OpenVR system or compositor is unavailable.");
 	
 
 			uint targetWidth = 0, targetHeight = 0;
@@ -210,8 +215,10 @@ namespace Bivrost.Bivrost360Player.OpenVR
 						compositor.WaitGetPoses(renderPoseArray, gamePoseArray);
 						if (renderPoseArray[Valve.VR.OpenVR.k_unTrackedDeviceIndex_Hmd].bPoseIsValid)
 						{
-							pose = gamePoseArray[Valve.VR.OpenVR.k_unTrackedDeviceIndex_Hmd];
+							pose = renderPoseArray[Valve.VR.OpenVR.k_unTrackedDeviceIndex_Hmd];
 						}
+
+						vrui.Update(deltaTime, ShouldShowVRUI);
 
 						foreach (EVREye eye in new EVREye[] { EVREye.Eye_Left, EVREye.Eye_Right })
 						{
@@ -246,7 +253,7 @@ namespace Bivrost.Bivrost360Player.OpenVR
 
 							Matrix worldMatrix = Matrix.Translation(lookPosition);
 							if (Logic.Instance.settings.OpenVRReverse)
-								worldMatrix = Matrix.RotationY(180) * worldMatrix;
+								worldMatrix = Matrix.RotationY(MathUtil.Pi) * worldMatrix;
 
 							Matrix MVP = worldMatrix * viewMatrix * projectionMatrix;
 							customEffectL.Parameters["WorldViewProj"].SetValue(MVP);
@@ -295,11 +302,11 @@ namespace Bivrost.Bivrost360Player.OpenVR
 							}
 
 							// reset UI position every frame if it is not visible
-							if (vrui.isUIHidden)
+							if (vrui.isUIHidden || (eye == EVREye.Eye_Left && vrui.ConsumeRecenterRequest()))
 								vrui.SetWorldPosition(viewMatrix.Forward, lookPosition, false);
 
-							vrui.Draw(Media, currentTime, Duration);
-							vrui.Render(deltaTime, viewMatrix, projectionMatrix, lookPosition, ShouldShowVRUI);
+							vrui.Draw(Media, currentTime, Duration, FileBrowser, IsSeekBarOnlyMode, IsVolumeBarOnlyMode, currentVolume, currentVolumeMuted, IsStatusHudOnlyMode, statusHudText, statusHudProgress);
+							vrui.Render(deltaTime, viewMatrix, projectionMatrix, lookPosition, ShouldShowVRUI, updateAlpha: false);
 
 							//// controllers:
 							//cubeEffect.View = viewMatrix;
@@ -349,12 +356,16 @@ namespace Bivrost.Bivrost360Player.OpenVR
 				}
 				finally
 				{
-					Valve.VR.OpenVR.Shutdown();
-
-					primitive?.Dispose();
+					waitForRendererStop.Set();
+					CleanupResources();
 					context.ClearState();
 					context.Flush();
 				}
+			}
+			}
+			finally
+			{
+				Valve.VR.OpenVR.Shutdown();
 			}
 		}
 

@@ -72,8 +72,8 @@
 		private float deltaTime = 0;
 		private float lastFrameTime = 0;
 		public bool HasFocus { get; set; } = true;
-		private Quaternion targetRotationQuaternion;
-		private Quaternion currentRotationQuaternion;
+		private Quaternion targetRotationQuaternion = Quaternion.Identity;
+		private Quaternion currentRotationQuaternion = Quaternion.Identity;
 		private float lerpSpeed = 3f;
 		private float targetFov = DEFAULT_FOV;
 		private float currentFov = DEFAULT_FOV;
@@ -160,15 +160,6 @@
 
 			_device.ImmediateContext.Flush();
 			ResetRotation();
-
-
-			var devices = SharpDX.RawInput.Device.GetDevices();
-			devices.ForEach(dev =>
-			{
-				if (dev.DeviceType == SharpDX.RawInput.DeviceType.Mouse)
-					SharpDX.RawInput.Device.RegisterDevice(SharpDX.Multimedia.UsagePage.Generic, SharpDX.Multimedia.UsageId.GenericMouse, SharpDX.RawInput.DeviceFlags.None, dev.Handle);
-				Console.WriteLine($"Scene::Attach DX device: {dev.DeviceName} :: {dev.DeviceType}");
-			});
 		}
 
 		private void ContentChanged()
@@ -214,8 +205,15 @@
 			pitch = 0;
 			Quaternion q1 = Quaternion.RotationYawPitchRoll(yaw, 0, 0);
 			Quaternion q2 = Quaternion.RotationYawPitchRoll(0, pitch, 0);
-			viewMatrix = Matrix.RotationQuaternion(q2 * q1);
-			currentRotationQuaternion = q2 * q1;
+			Quaternion q = q2 * q1;
+			viewMatrix = Matrix.RotationQuaternion(q);
+			currentRotationQuaternion = q;
+			targetRotationQuaternion = q;
+		}
+
+		public Quaternion GetCurrentLook()
+		{
+			return currentRotationQuaternion;
 		}
 
 
@@ -223,9 +221,18 @@
 		{
 			MediaDecoder.Instance.OnContentChanged -= ContentChanged;
 
-			Disposer.RemoveAndDispose(ref graphicsDevice);
-			Disposer.RemoveAndDispose(ref customEffect);
-			Disposer.RemoveAndDispose(ref primitive);
+			lock (localCritical)
+			{
+				Disposer.RemoveAndDispose(ref toolkitVideoTexture);
+				Disposer.RemoveAndDispose(ref localVideoTexture);
+				Disposer.RemoveAndDispose(ref primitive);
+				Disposer.RemoveAndDispose(ref customEffect);
+				// Do NOT dispose graphicsDevice here because it wraps DPFCanvas.Device (shared across video changes).
+				graphicsDevice = null;
+			}
+
+			navigatorInput?.Dispose();
+			navigatorInput = null;
 		}
 
 		public void StereographicProjection()
@@ -255,11 +262,12 @@
 			deltaTime = currentFrameTime - lastFrameTime;
 			lastFrameTime = currentFrameTime;
 
-			currentRotationQuaternion = Quaternion.Lerp(currentRotationQuaternion, targetRotationQuaternion, lerpSpeed * deltaTime);
+			float rotAmount = MathUtil.Clamp(lerpSpeed * deltaTime, 0f, 1f);
+			currentRotationQuaternion = Quaternion.Lerp(currentRotationQuaternion, targetRotationQuaternion, rotAmount);
 			if (UseVrLook)
 				currentRotationQuaternion = headsetLookRotation;
 
-			currentOffset = Lerp(currentOffset, littlePlanet ? -3f : 0f, deltaTime * 3f);
+			currentOffset = currentOffset.LerpInPlace(littlePlanet ? -3f : 0f, deltaTime * 3f);
 
 			viewMatrix = Matrix.RotationQuaternion(currentRotationQuaternion);
 			viewMatrix *= Matrix.Translation(0, 0, currentOffset);
@@ -394,7 +402,7 @@
 			UpdateInput();
 
 			// Little planet makes sense only in sphere and dome projections
-			var littlePlanetProjections = new[] { ProjectionMode.Sphere, ProjectionMode.Dome };
+			var littlePlanetProjections = new[] { ProjectionMode.Sphere, ProjectionMode.Dome, ProjectionMode.Fisheye180, ProjectionMode.Mesh180 };
 			if (littlePlanet && !littlePlanetProjections.Contains(projectionMode))
 			{
 				RectlinearProjection();
@@ -431,19 +439,25 @@
 
 
 		#region IContentUpdatableFromMediaEngine
+		private SharpDX.Toolkit.Graphics.Texture2D toolkitVideoTexture = null;
+
 		void IContentUpdatableFromMediaEngine.ReceiveTextures(Texture2D textureL, Texture2D textureR)
 		{
 			if (MediaDecoder.Instance.TextureReleased) return;
 
 			lock (localCritical)
 			{
-				localVideoTexture?.Dispose();
-				localVideoTexture = null;
+				if (graphicsDevice == null || customEffect == null || _device == null)
+					return;
+
+				Disposer.RemoveAndDispose(ref toolkitVideoTexture);
+				Disposer.RemoveAndDispose(ref localVideoTexture);
 
 				using (var resource = textureL.QueryInterface<SharpDX.DXGI.Resource>())
 				using (var sharedTex = _device.OpenSharedResource<Texture2D>(resource.SharedHandle))
 				{
-					customEffect.Parameters["UserTex"].SetResource(SharpDX.Toolkit.Graphics.Texture2D.New(graphicsDevice, sharedTex));
+					toolkitVideoTexture = SharpDX.Toolkit.Graphics.Texture2D.New(graphicsDevice, sharedTex);
+					customEffect.Parameters["UserTex"].SetResource(toolkitVideoTexture);
 					customEffect.Parameters["gammaFactor"].SetValue(1f);
 					customEffect.CurrentTechnique = customEffect.Techniques["ColorTechnique"];
 					customEffect.CurrentTechnique.Passes[0].Apply();
@@ -468,41 +482,51 @@
 				ImageLockMode.ReadOnly,
 				PixelFormat.Format32bppRgb
 			);
-			var dataRect = new DataRectangle(data.Scan0, data.Stride);
-
-			lock (localCritical)
+			try
 			{
-				localVideoTexture?.Dispose();
+				var dataRect = new DataRectangle(data.Scan0, data.Stride);
 
-				localVideoTexture = new Texture2D(
-					_device,
-					new Texture2DDescription()
-					{
-						Width = r.Width,
-						Height = r.Height,
-						MipLevels = 1,
-						ArraySize = 1,
-						Format = Format.B8G8R8X8_UNorm,
-						Usage = ResourceUsage.Default,
-						SampleDescription = new SampleDescription(1, 0),
-						BindFlags = /*BindFlags.RenderTarget |*/ BindFlags.ShaderResource,
-						CpuAccessFlags = CpuAccessFlags.None,
-						OptionFlags = ResourceOptionFlags.Shared
-					},
-					dataRect
-				);
-
-				using (var resource = localVideoTexture.QueryInterface<SharpDX.DXGI.Resource>())
-				using (var sharedTex = _device.OpenSharedResource<Texture2D>(resource.SharedHandle))
+				lock (localCritical)
 				{
-					customEffect.Parameters["UserTex"].SetResource(SharpDX.Toolkit.Graphics.Texture2D.New(graphicsDevice, sharedTex));
-					customEffect.Parameters["gammaFactor"].SetValue(1f);
-					customEffect.CurrentTechnique = customEffect.Techniques["ColorTechnique"];
-					customEffect.CurrentTechnique.Passes[0].Apply();
+					if (graphicsDevice == null || customEffect == null || _device == null)
+						return;
+
+					Disposer.RemoveAndDispose(ref toolkitVideoTexture);
+					Disposer.RemoveAndDispose(ref localVideoTexture);
+
+					localVideoTexture = new Texture2D(
+						_device,
+						new Texture2DDescription()
+						{
+							Width = r.Width,
+							Height = r.Height,
+							MipLevels = 1,
+							ArraySize = 1,
+							Format = Format.B8G8R8X8_UNorm,
+							Usage = ResourceUsage.Default,
+							SampleDescription = new SampleDescription(1, 0),
+							BindFlags = /*BindFlags.RenderTarget |*/ BindFlags.ShaderResource,
+							CpuAccessFlags = CpuAccessFlags.None,
+							OptionFlags = ResourceOptionFlags.Shared
+						},
+						dataRect
+					);
+
+					using (var resource = localVideoTexture.QueryInterface<SharpDX.DXGI.Resource>())
+					using (var sharedTex = _device.OpenSharedResource<Texture2D>(resource.SharedHandle))
+					{
+						toolkitVideoTexture = SharpDX.Toolkit.Graphics.Texture2D.New(graphicsDevice, sharedTex);
+						customEffect.Parameters["UserTex"].SetResource(toolkitVideoTexture);
+						customEffect.Parameters["gammaFactor"].SetValue(1f);
+						customEffect.CurrentTechnique = customEffect.Techniques["ColorTechnique"];
+						customEffect.CurrentTechnique.Passes[0].Apply();
+					}
 				}
 			}
-
-			bitmap.UnlockBits(data);
+			finally
+			{
+				bitmap.UnlockBits(data);
+			}
 
 			log.Info($"Changed texture");
 		}
@@ -510,10 +534,10 @@
 
 		void IContentUpdatableFromMediaEngine.ClearContent()
 		{
-			 lock (localCritical)
+			lock (localCritical)
 			{
-				localVideoTexture?.Dispose();
-				//customEffect.Parameters["UserTex"].SetResource(null);
+				Disposer.RemoveAndDispose(ref toolkitVideoTexture);
+				Disposer.RemoveAndDispose(ref localVideoTexture);
 			}
 		}
 

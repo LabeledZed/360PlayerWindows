@@ -8,6 +8,6 @@
              d:DesignHeight="56" d:DesignWidth="366" HorizontalAlignment="Stretch">
     <StackPanel HorizontalAlignment="Stretch">
         <TextBlock x:Name="DisplayName" Text="String option display name" Margin="8,2" Width="350"/>
-        <ComboBox x:Name="EnumList" Text="option string value" Margin="8,2" Width="350" IsReadOnly="{Binding ReadOnly}" SelectedValue="{Binding Value}"/>
+        <ComboBox x:Name="EnumList" Text="option string value" Margin="8,2" Width="350" IsEnabled="{Binding Enabled}" SelectedValue="{Binding Value}"/>
     </StackPanel>
 </UserControl>

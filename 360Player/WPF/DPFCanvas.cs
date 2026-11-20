@@ -46,6 +46,8 @@
         public CancellationToken token;
         public CancellationTokenSource cts;
         public object renderLock = new object();
+        private Thread renderThread;
+        private Action reloadHandler;
 
 
         public DPFCanvas()
@@ -60,16 +62,20 @@
             if (DPFCanvas.IsInDesignMode)
                 return;
 
-			NeedsReloading += () => Caliburn.Micro.Execute.OnUIThread(() =>
-				{
-					this.StopRendering();
-					this.EndD3D();
-					this.StartD3D();
-					this.StartRendering();
-				});
+            if (reloadHandler == null)
+            {
+                reloadHandler = () => Caliburn.Micro.Execute.OnUIThreadAsync(() =>
+                {
+                    this.StopRendering();
+                    this.EndD3D();
+                    this.StartD3D();
+                    this.StartRendering();
+                });
+                NeedsReloading += reloadHandler;
+            }
 
-			this.StartD3D();
-			//this.StartRendering();
+            if (this.Device == null || this.Device.IsDisposed)
+                this.StartD3D();
         }
 
 		public void LateStartD3D()
@@ -81,6 +87,12 @@
         {
             if (DPFCanvas.IsInDesignMode)
                 return;
+
+            if (reloadHandler != null)
+            {
+                NeedsReloading -= reloadHandler;
+                reloadHandler = null;
+            }
 
             this.StopRendering();
             this.EndD3D();
@@ -111,102 +123,120 @@
 
         private void EndD3D()
         {
-            if (this.RenderScene != null)
+            lock (renderLock)
             {
-                this.RenderScene.Detach();
-                this.SceneAttached = false;
+                if (this.RenderScene != null)
+                {
+                    this.RenderScene.Detach();
+                    this.SceneAttached = false;
+                }
+
+                if (this.D3DSurface != null)
+                {
+                    this.D3DSurface.IsFrontBufferAvailableChanged -= OnIsFrontBufferAvailableChanged;
+                }
+                this.Source = null;
+
+                Disposer.RemoveAndDispose(ref this.D3DSurface);
+
+                Disposer.RemoveAndDispose(ref this.RenderTargetView);
+                Disposer.RemoveAndDispose(ref this.DepthStencilView);
+                Disposer.RemoveAndDispose(ref this.RenderTarget);
+                Disposer.RemoveAndDispose(ref this.DepthStencil);
+
+                Disposer.RemoveAndDispose(ref this.RenderTargetView2);
+                Disposer.RemoveAndDispose(ref this.DepthStencilView2);
+                Disposer.RemoveAndDispose(ref this.RenderTarget2);
+                Disposer.RemoveAndDispose(ref this.DepthStencil2);
+
+                Disposer.RemoveAndDispose(ref this.dxdevice);
+                Disposer.RemoveAndDispose(ref this.Device);
             }
-
-            this.D3DSurface.IsFrontBufferAvailableChanged -= OnIsFrontBufferAvailableChanged;
-            this.Source = null;
-
-            Disposer.RemoveAndDispose(ref this.D3DSurface);
-
-            Disposer.RemoveAndDispose(ref this.RenderTargetView);
-            Disposer.RemoveAndDispose(ref this.DepthStencilView);
-            Disposer.RemoveAndDispose(ref this.RenderTarget);
-            Disposer.RemoveAndDispose(ref this.DepthStencil);
-
-            Disposer.RemoveAndDispose(ref this.RenderTargetView2);
-            Disposer.RemoveAndDispose(ref this.DepthStencilView2);
-            Disposer.RemoveAndDispose(ref this.RenderTarget2);
-            Disposer.RemoveAndDispose(ref this.DepthStencil2);
-
-            Disposer.RemoveAndDispose(ref this.dxdevice);
-            Disposer.RemoveAndDispose(ref this.Device);
         }
 
         public void CreateAndBindTargets()
         {
-			this.D3DSurface.SetRenderTargetDX11(null);
+            lock (renderLock)
+            {
+                if (this.D3DSurface == null || this.Device == null || this.Device.IsDisposed)
+                    return;
 
-			Disposer.RemoveAndDispose(ref this.RenderTargetView);
-			Disposer.RemoveAndDispose(ref this.DepthStencilView);
-			Disposer.RemoveAndDispose(ref this.RenderTarget);
-			Disposer.RemoveAndDispose(ref this.DepthStencil);
+                this.D3DSurface.SetRenderTargetDX11(null);
 
-            Disposer.RemoveAndDispose(ref this.RenderTargetView2);
-            Disposer.RemoveAndDispose(ref this.DepthStencilView2);
-            Disposer.RemoveAndDispose(ref this.RenderTarget2);
-            Disposer.RemoveAndDispose(ref this.DepthStencil2);
+                Disposer.RemoveAndDispose(ref this.RenderTargetView);
+                Disposer.RemoveAndDispose(ref this.DepthStencilView);
+                Disposer.RemoveAndDispose(ref this.RenderTarget);
+                Disposer.RemoveAndDispose(ref this.DepthStencil);
 
-            int width = (int)System.Windows.SystemParameters.PrimaryScreenWidth;
-			int height = (int)System.Windows.SystemParameters.PrimaryScreenHeight;
+                Disposer.RemoveAndDispose(ref this.RenderTargetView2);
+                Disposer.RemoveAndDispose(ref this.DepthStencilView2);
+                Disposer.RemoveAndDispose(ref this.RenderTarget2);
+                Disposer.RemoveAndDispose(ref this.DepthStencil2);
 
-			Texture2DDescription colordesc = new Texture2DDescription
-			{
-				BindFlags = BindFlags.RenderTarget | BindFlags.ShaderResource,
-				Format = Format.B8G8R8A8_UNorm,
-				Width = width,
-				Height = height,
-				MipLevels = 1,
-				SampleDescription = new SampleDescription(1, 0),
-				Usage = ResourceUsage.Default,
-				OptionFlags = ResourceOptionFlags.Shared,
-				CpuAccessFlags = CpuAccessFlags.None,
-				ArraySize = 1
-			};
+                int width = Math.Max(1, (int)System.Windows.SystemParameters.PrimaryScreenWidth);
+                int height = Math.Max(1, (int)System.Windows.SystemParameters.PrimaryScreenHeight);
 
-			Texture2DDescription depthdesc = new Texture2DDescription
-			{
-				BindFlags = BindFlags.DepthStencil,
-				Format = Format.D32_Float_S8X24_UInt,
-				Width = width,
-				Height = height,
-				MipLevels = 1,
-				SampleDescription = new SampleDescription(1, 0),
-				Usage = ResourceUsage.Default,
-				OptionFlags = ResourceOptionFlags.None,
-				CpuAccessFlags = CpuAccessFlags.None,
-				ArraySize = 1,
-			};
+                Texture2DDescription colordesc = new Texture2DDescription
+                {
+                    BindFlags = BindFlags.RenderTarget | BindFlags.ShaderResource,
+                    Format = Format.B8G8R8A8_UNorm,
+                    Width = width,
+                    Height = height,
+                    MipLevels = 1,
+                    SampleDescription = new SampleDescription(1, 0),
+                    Usage = ResourceUsage.Default,
+                    OptionFlags = ResourceOptionFlags.Shared,
+                    CpuAccessFlags = CpuAccessFlags.None,
+                    ArraySize = 1
+                };
 
-			this.RenderTarget = new Texture2D(this.Device, colordesc);
-			this.DepthStencil = new Texture2D(this.Device, depthdesc);
-			this.RenderTargetView = new RenderTargetView(this.Device, this.RenderTarget);
-			this.DepthStencilView = new DepthStencilView(this.Device, this.DepthStencil);
+                Texture2DDescription depthdesc = new Texture2DDescription
+                {
+                    BindFlags = BindFlags.DepthStencil,
+                    Format = Format.D32_Float_S8X24_UInt,
+                    Width = width,
+                    Height = height,
+                    MipLevels = 1,
+                    SampleDescription = new SampleDescription(1, 0),
+                    Usage = ResourceUsage.Default,
+                    OptionFlags = ResourceOptionFlags.None,
+                    CpuAccessFlags = CpuAccessFlags.None,
+                    ArraySize = 1,
+                };
 
-            this.RenderTarget2 = new Texture2D(this.Device, colordesc);
-            this.DepthStencil2 = new Texture2D(this.Device, depthdesc);
-            this.RenderTargetView2 = new RenderTargetView(this.Device, this.RenderTarget2);
-            this.DepthStencilView2 = new DepthStencilView(this.Device, this.DepthStencil2);
+                this.RenderTarget = new Texture2D(this.Device, colordesc);
+                this.DepthStencil = new Texture2D(this.Device, depthdesc);
+                this.RenderTargetView = new RenderTargetView(this.Device, this.RenderTarget);
+                this.DepthStencilView = new DepthStencilView(this.Device, this.DepthStencil);
 
-            this.D3DSurface.SetRenderTargetDX11(this.RenderTarget);
+                this.RenderTarget2 = new Texture2D(this.Device, colordesc);
+                this.DepthStencil2 = new Texture2D(this.Device, depthdesc);
+                this.RenderTargetView2 = new RenderTargetView(this.Device, this.RenderTarget2);
+                this.DepthStencilView2 = new DepthStencilView(this.Device, this.DepthStencil2);
+
+                this.D3DSurface.SetRenderTargetDX11(this.RenderTarget);
+            }
         }
 
         public AutoResetEvent waitForFrame = new AutoResetEvent(false);
         public void RenderThread(object token)
         {
             var localToken = (CancellationToken)token;
-            while(!localToken.IsCancellationRequested)
+            while (!localToken.IsCancellationRequested)
             {
-                if(waitForFrame.WaitOne(20))
-                    if(!localToken.IsCancellationRequested)
+                if (waitForFrame.WaitOne(20))
+                    if (!localToken.IsCancellationRequested)
                     {
                         if (Monitor.TryEnter(renderLock, 16))
                         {
-                            this.Render(this.RenderTimer.Elapsed);
-                            Monitor.Exit(renderLock);
+                            try
+                            {
+                                this.Render(this.RenderTimer.Elapsed);
+                            }
+                            finally
+                            {
+                                Monitor.Exit(renderLock);
+                            }
                         }
                     }
             }
@@ -217,20 +247,23 @@
             if (this.RenderTimer.IsRunning)
                 return;
 
-            if (!Device.IsDisposed)
+            lock (renderLock)
             {
-                Device.ImmediateContext.ClearRenderTargetView(RenderTargetView, Color4.Black);
-                Device.ImmediateContext.ClearRenderTargetView(RenderTargetView2, Color4.Black);
+                if (Device != null && !Device.IsDisposed && RenderTargetView != null && RenderTargetView2 != null)
+                {
+                    Device.ImmediateContext.ClearRenderTargetView(RenderTargetView, Color4.Black);
+                    Device.ImmediateContext.ClearRenderTargetView(RenderTargetView2, Color4.Black);
+                }
             }
 
-
+            cts?.Dispose();
             cts = new CancellationTokenSource();
             token = cts.Token;
-            (new Thread(new ParameterizedThreadStart(RenderThread)) { IsBackground = true }).Start(token);
+            renderThread = new Thread(new ParameterizedThreadStart(RenderThread)) { IsBackground = true, Name = "DPFCanvas RenderThread" };
+            renderThread.Start(token);
 
             CompositionTarget.Rendering += OnRendering;
             this.RenderTimer.Start();
-            //this.fpsWatch.Start();
         }
 
         public void StopRendering()
@@ -240,53 +273,42 @@
 
             CompositionTarget.Rendering -= OnRendering;
             this.RenderTimer.Stop();
-            //this.fpsWatch.Stop();
-            cts.Cancel();
+            cts?.Cancel();
+            waitForFrame.Set();
+            if (renderThread != null && renderThread.IsAlive && Thread.CurrentThread != renderThread)
+            {
+                renderThread.Join(500);
+            }
+            renderThread = null;
+            cts?.Dispose();
+            cts = null;
         }
 
-		private bool odd = false;
         private TimeSpan lastRender;
-        //private Stopwatch fpsWatch = new Stopwatch();
-        //long frames = 0;
 
         private void OnRendering(object sender, EventArgs e)
         {
-            //if (odd)
-            //{
-            //	odd = false;
-            //	return;
-            //}
-            //else odd = true;
-
-            //foreach(KeyValuePair<System.Windows.Input.Key, bool> kvp in KeyState)
-            //{
-            //    KeyState[kvp.Key] = System.Windows.Input.Keyboard.IsKeyDown(kvp.Key);
-            //    if (KeyState[kvp.Key])
-            //        ;
-            //}
-
             RenderingEventArgs args = (RenderingEventArgs)e;
             if (this.lastRender != args.RenderingTime)
             {                
                 if (!this.RenderTimer.IsRunning)
                     return;
 
-                //this.Render(this.RenderTimer.Elapsed);
-                
-
                 if (Monitor.TryEnter(renderLock, 16))
                 {
-                    if (this.Device != null && !Device.IsDisposed && !RenderTarget.IsDisposed && !RenderTarget2.IsDisposed)
+                    try
                     {
-                        if (RenderTarget.IsDisposed)
-                            ;
-                        if (RenderTarget2.IsDisposed)
-                            ;
-                        this.Device.ImmediateContext.CopyResource(RenderTarget2, RenderTarget);
+                        if (this.Device != null && !Device.IsDisposed && RenderTarget != null && !RenderTarget.IsDisposed && RenderTarget2 != null && !RenderTarget2.IsDisposed)
+                        {
+                            this.Device.ImmediateContext.CopyResource(RenderTarget2, RenderTarget);
+                        }
                     }
-                    Monitor.Exit(renderLock);
+                    finally
+                    {
+                        Monitor.Exit(renderLock);
+                    }
                 }
-                    this.D3DSurface.InvalidateD3DImage();
+                this.D3DSurface?.InvalidateD3DImage();
 
                 this.waitForFrame.Set();
 
@@ -381,14 +403,17 @@
             get { return this.RenderScene; }
             set
             {
-                if (ReferenceEquals(this.RenderScene, value))
-                    return;
+                lock (renderLock)
+                {
+                    if (ReferenceEquals(this.RenderScene, value))
+                        return;
 
-                if (this.RenderScene != null)
-                    this.RenderScene.Detach();
+                    if (this.RenderScene != null && this.SceneAttached)
+                        this.RenderScene.Detach();
 
-                this.SceneAttached = false;
-                this.RenderScene = value;
+                    this.SceneAttached = false;
+                    this.RenderScene = value;
+                }
             }
         }
 

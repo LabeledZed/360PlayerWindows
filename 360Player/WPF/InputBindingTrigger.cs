@@ -34,6 +34,8 @@ public class InputBindingTrigger : TriggerBase<FrameworkElement>, ICommand
 		InvokeActions(parameter);
 	}
 
+	private Window _attachedWindow;
+
 	protected override void OnAttached()
 	{
 		if (InputBinding != null)
@@ -41,38 +43,62 @@ public class InputBindingTrigger : TriggerBase<FrameworkElement>, ICommand
 			InputBinding.Command = this;
 			if (AssociatedObject.Focusable)
 			{
-				AssociatedObject.InputBindings.Add(InputBinding);
+				if (!AssociatedObject.InputBindings.Contains(InputBinding))
+					AssociatedObject.InputBindings.Add(InputBinding);
 			}
 			else
 			{
-				Window window = null;
-				AssociatedObject.Loaded += delegate
+				AssociatedObject.Loaded += OnAssociatedObjectLoaded;
+				AssociatedObject.Unloaded += OnAssociatedObjectUnloaded;
+				if (AssociatedObject.IsLoaded)
 				{
-					window = GetWindow(AssociatedObject);
-					if (!window.InputBindings.Contains(InputBinding))
-					{
-						window.InputBindings.Add(InputBinding);
-					}
-				};
-				AssociatedObject.Unloaded += delegate
-				{
-					window.InputBindings.Remove(InputBinding);
-				};
+					AttachToWindow();
+				}
 			}
 		}
 		base.OnAttached();
 	}
 
-
-
-	private Window GetWindow(FrameworkElement frameworkElement)
+	protected override void OnDetaching()
 	{
-		if (frameworkElement is Window)
-			return frameworkElement as Window;
+		if (AssociatedObject != null)
+		{
+			AssociatedObject.Loaded -= OnAssociatedObjectLoaded;
+			AssociatedObject.Unloaded -= OnAssociatedObjectUnloaded;
+			if (InputBinding != null)
+				AssociatedObject.InputBindings.Remove(InputBinding);
+		}
+		DetachFromWindow();
+		base.OnDetaching();
+	}
 
-		var parent = frameworkElement.Parent as FrameworkElement;
-		//Debug.Assert(parent != null);
+	private void OnAssociatedObjectLoaded(object sender, RoutedEventArgs e)
+	{
+		AttachToWindow();
+	}
 
-		return GetWindow(parent);
+	private void OnAssociatedObjectUnloaded(object sender, RoutedEventArgs e)
+	{
+		DetachFromWindow();
+	}
+
+	private void AttachToWindow()
+	{
+		if (AssociatedObject == null || InputBinding == null)
+			return;
+		_attachedWindow = Window.GetWindow(AssociatedObject);
+		if (_attachedWindow != null && !_attachedWindow.InputBindings.Contains(InputBinding))
+		{
+			_attachedWindow.InputBindings.Add(InputBinding);
+		}
+	}
+
+	private void DetachFromWindow()
+	{
+		if (_attachedWindow != null && InputBinding != null)
+		{
+			_attachedWindow.InputBindings.Remove(InputBinding);
+			_attachedWindow = null;
+		}
 	}
 }

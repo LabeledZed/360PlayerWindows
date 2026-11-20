@@ -10,11 +10,9 @@ namespace Bivrost.Bivrost360Player.ConfigUI
 	{
 		public BoolConfigItemViewModel(SettingsPropertyAttribute attr, Func<bool> loadCallback, Action<bool> saveCallback) : base(attr, loadCallback, saveCallback) { }
 
-		public bool ReadOnly { get; set; } = false;
-		public bool Enabled { get { return !this.ReadOnly; } }
-
 		public void ToggleValue()
 		{
+			if (ReadOnly) return;
 			Value = !Value;
 			NotifyOfPropertyChange(null);
 		}

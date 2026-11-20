@@ -127,7 +127,7 @@ float4 ColorPixelShader(PixelInputType input) : SV_Target
 
         for (int i = 0; i < 13; i++)
         {
-            blur.y = input.TexCoord.y + Pixels[i] * pixelWidth * pow(1.5 - d, 0.5);
+            blur.y = input.TexCoord.y + Pixels[i] * pixelWidth * pow(max(1.5 - d, 0.0), 0.5);
             color += UserTex.Sample(UserTexSampler, blur) * BlurWeights[i];
         }
 
@@ -156,13 +156,13 @@ float4 ColorPixelShader(PixelInputType input) : SV_Target
         }
 
         
-        color = pow(pow(0.5 - d, 0.7) * color, gammaFactor);
+        color = pow(max(pow(max(0.5 - d, 0.0), 0.7) * color, 0.0), gammaFactor);
         color.a = 1;
         return color;
     }
 
 
-    return pow(UserTex.Sample(UserTexSampler, input.TexCoord), gammaFactor);
+    return pow(max(UserTex.Sample(UserTexSampler, input.TexCoord), 0.0), gammaFactor);
 }
 
 

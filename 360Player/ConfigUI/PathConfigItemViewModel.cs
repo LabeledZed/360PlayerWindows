@@ -13,15 +13,16 @@ namespace Bivrost.Bivrost360Player.ConfigUI
 
 		public void SelectPath()
 		{
-			FolderBrowserDialog fbd = new FolderBrowserDialog();
-			DialogResult result = fbd.ShowDialog();
-			if (result == DialogResult.OK)
+			if (ReadOnly) return;
+			using (FolderBrowserDialog fbd = new FolderBrowserDialog())
 			{
-				Value = fbd.SelectedPath;
+				DialogResult result = fbd.ShowDialog();
+				if (result == DialogResult.OK)
+				{
+					Value = fbd.SelectedPath;
+				}
 			}
 		}
-
-		public bool ReadOnly { get; set; } = false;
 
 		public bool CanSelectPath { get { return !this.ReadOnly; } }
 	}
