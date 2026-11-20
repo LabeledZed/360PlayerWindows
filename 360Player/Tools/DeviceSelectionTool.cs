@@ -14,14 +14,17 @@ namespace Bivrost.Bivrost360Player.Tools
 
         public static void EnumerateGraphicCards()
         {
-            Factory1 dxgiFactory = new Factory1();
-            string adapters = "";
-            dxgiFactory.Adapters.ToList().ForEach(adapter =>
+            using (Factory1 dxgiFactory = new Factory1())
             {
-                adapters += adapter.Description.Description + "\n";
-            });
-            //System.Windows.MessageBox.Show(adapters);
-            
+                string adapters = "";
+                foreach (var adapter in dxgiFactory.Adapters)
+                {
+                    using (adapter)
+                    {
+                        adapters += adapter.Description.Description + "\n";
+                    }
+                }
+            }
         }
 
     }

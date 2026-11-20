@@ -19,9 +19,23 @@ namespace Bivrost.Bivrost360Player
 	{
 		// APP GUID 150A3700-F729-4FE2-B61B-C3C716530C58
 		// Single instance lock
-		static Mutex mutex = new Mutex(true, "{41F397A7-D196-4C6F-B75A-616069D45DAD}");
-		bool ownMutex = false;
+		static Mutex mutex = new Mutex(false, "{41F397A7-D196-4C6F-B75A-616069D45DAD}");
+		static bool ownMutex = false;
 		private static Logger logger;
+
+		internal static void ReleaseSingleInstanceMutex()
+		{
+			if (!ownMutex) return;
+			try
+			{
+				mutex.ReleaseMutex();
+				ownMutex = false;
+			}
+			catch (Exception exc)
+			{
+				System.Diagnostics.Debug.WriteLine("Releasing mutex: " + exc.Message);
+			}
+		}
 
 		[DllImport("kernel32", SetLastError = true, CharSet = CharSet.Ansi)]
 		private static extern IntPtr LoadLibrary([MarshalAs(UnmanagedType.LPStr)]string lpFileName);
@@ -41,7 +55,7 @@ namespace Bivrost.Bivrost360Player
 		{
 			if (IsWindowsTooOld())
 			{
-				MessageBox.Show($"Windows Version '{Environment.OSVersion.VersionString}' in not supported by BIVROST® 360Player. Please upgrade.", "Out of date Windows warning", MessageBoxButton.OK, MessageBoxImage.Warning);
+				MessageBox.Show($"Windows Version '{Environment.OSVersion.VersionString}' is not supported by BIVROST® 360Player. Please upgrade.", "Out of date Windows warning", MessageBoxButton.OK, MessageBoxImage.Warning);
 			}
 			Initialize();
 		}
@@ -89,17 +103,13 @@ namespace Bivrost.Bivrost360Player
                     {
                         path = Windows.Storage.ApplicationData.Current.LocalFolder.Path + Path.DirectorySeparatorChar;
                     }
-                    catch(InvalidOperationException)
+                    catch (Exception)
                     {
-                        // If no application identity, use application path (desktop/clickonce app)
-                        path = (Path.GetDirectoryName(Assembly.GetExecutingAssembly().CodeBase) + Path.DirectorySeparatorChar).Remove(0, "file:\\".Length);
+                        // If no application identity, use application directory (desktop/portable app)
+                        string assemblyPath = new Uri(Assembly.GetExecutingAssembly().CodeBase).LocalPath;
+                        path = Path.GetDirectoryName(assemblyPath) + Path.DirectorySeparatorChar;
                     }
                     Logic.Prepare(path);
-
-                    //MessageBox.Show(Windows.Storage.ApplicationData.Current.LocalFolder.Path);
-                    string runArgument = "360player.exe |%1";
-					foreach (var ext in MediaDecoder.SupportedFileExtensions)
-						AssociateExtension($".{ext}", runArgument);
 				}
 			}
 
@@ -114,39 +124,37 @@ namespace Bivrost.Bivrost360Player
 
 			try
 			{
-				if (AppDomain.CurrentDomain.SetupInformation.ActivationArguments != null)
+				if (AppDomain.CurrentDomain.SetupInformation.ActivationArguments?.ActivationData != null)
 				{
 					args = AppDomain.CurrentDomain.SetupInformation.ActivationArguments.ActivationData;
 					logger.Info("Forwarding activation arguments as command line: " + string.Join(", ", args));
 				}
 				
-			} catch(Exception ex)
+			}
+			catch (Exception)
 			{
-				//MessageBox.Show("ex: " + ex.Message + "\n" + ex.StackTrace);
 			}
 
-
-
-
-
+			bool acquiredMutex = false;
 			try
 			{
-				mutex.WaitOne(TimeSpan.Zero, true);
+				acquiredMutex = mutex.WaitOne(TimeSpan.Zero, false);
 			}
-			catch(AbandonedMutexException exc)
+			catch (AbandonedMutexException)
 			{
-				mutex.ReleaseMutex();
+				acquiredMutex = true;
 			}
 
-			if (mutex.WaitOne(TimeSpan.Zero, true) || System.Diagnostics.Debugger.IsAttached)
+			ownMutex = acquiredMutex;
+
+			if (ownMutex || System.Diagnostics.Debugger.IsAttached)
 			{
 				logger.Info("Initiating player window...");
-				ownMutex = true;
 
 				if(args != null && args.Length > 0)
 				{
 					var lastArgument = args[args.Length - 1];
-					if (!lastArgument.ToLowerInvariant().EndsWith(".exe") && !lastArgument.ToLowerInvariant().EndsWith(".application"))
+					if (!string.IsNullOrWhiteSpace(lastArgument) && !lastArgument.ToLowerInvariant().EndsWith(".exe") && !lastArgument.ToLowerInvariant().EndsWith(".application"))
 					{
 						logger.Info("Forwarding argument from command line:");
 						ShellViewModel.FileFromArgs = lastArgument;
@@ -159,7 +167,7 @@ namespace Bivrost.Bivrost360Player
 			else
 			{
 				logger.Info("This is a secondary instance - forwarding the file that should be played (if any) to the main instance.");
-				if (args.Length > 0)
+				if (args != null && args.Length > 0)
 				{
 					if (!string.IsNullOrWhiteSpace(args[args.Length - 1]))
 					{
@@ -170,44 +178,19 @@ namespace Bivrost.Bivrost360Player
 							var cds = new NativeMethods.COPYDATASTRUCT
 							{
 								dwData = new IntPtr(3),
-								cbData = str.Length + 1,
+								cbData = (str.Length + 1) * sizeof(char),
 								lpData = str
 							};
 
-							//MessageBox.Show("Sending: " + cds.lpData);
-
 							IntPtr bwin = GetPlayerWindow();
-							logger.Info("Sending to player window: " + bwin.ToString());
-							NativeMethods.SendMessage(bwin, NativeMethods.WM_COPYDATA, IntPtr.Zero, ref cds);
-
-
-							//Clipboard.SetText(args[1]);
-							//NativeMethods.PostMessage((IntPtr)NativeMethods.HWND_BROADCAST, NativeMethods.WM_SHOWBIVROSTPLAYER, IntPtr.Zero, IntPtr.Zero);
-
-							//string str = args[0];
-							//var cds = new NativeMethods.COPYDATASTRUCT
-							//{
-							//	dwData = new IntPtr(3),
-							//	cbData = str.Length + 1,
-							//	lpData = str
-							//};
-							//IntPtr bwin = NativeMethods.FindWindow(null, "Bivrost 360Player");
-							//NativeMethods.SendMessage(bwin, NativeMethods.WM_COPYDATA, IntPtr.Zero, ref cds);
+							if (bwin != IntPtr.Zero)
+							{
+								logger.Info("Sending to player window: " + bwin.ToString());
+								NativeMethods.SendMessage(bwin, NativeMethods.WM_COPYDATA, IntPtr.Zero, ref cds);
+							}
 						}
 					}
-				} 
-
-				//	else if(args.Length == 3)
-				//{
-				//	if (!string.IsNullOrWhiteSpace(args[1]) && !string.IsNullOrWhiteSpace(args[2]))
-				//	{
-				//		if (args[1] == "--bivrost-protocol")
-				//		{
-				//			Clipboard.SetText(args[2]);
-				//			NativeMethods.PostMessage((IntPtr)NativeMethods.HWND_BROADCAST, NativeMethods.WM_SHOWBIVROSTPLAYER, IntPtr.Zero, IntPtr.Zero);
-				//		}
-				//	}
-				//}
+				}
 				Application.Shutdown();
 			}
 		}
@@ -228,23 +211,18 @@ namespace Bivrost.Bivrost360Player
 			//catch (Exception exc) { }
 
 			base.OnExit(sender, e);
-			try {
-				if (ownMutex)
-					mutex.ReleaseMutex();
-			} catch(Exception exc)
-			{
-				System.Diagnostics.Debug.WriteLine("Releasing mutex: " + exc.Message);
-			}
+			ReleaseSingleInstanceMutex();
 		}
 
 		private static void SetAddRemoveProgramsIcon()
 		{
 			//only run if deployed 
 			try {
-				if (File.Exists(System.Windows.Forms.Application.StartupPath + "updated")) return;
-				File.WriteAllText(System.Windows.Forms.Application.StartupPath + "updated", "");
+				string markerPath = Path.Combine(System.Windows.Forms.Application.StartupPath, "updated");
+				if (File.Exists(markerPath)) return;
+				File.WriteAllText(markerPath, "");
 			}
-			catch (Exception e)
+			catch (Exception)
 			{
 				
 			}
@@ -253,31 +231,33 @@ namespace Bivrost.Bivrost360Player
 			{
 				try
 				{
-					Assembly code = Assembly.GetExecutingAssembly();
-					AssemblyDescriptionAttribute asdescription =
-						(AssemblyDescriptionAttribute)Attribute.GetCustomAttribute(code, typeof(AssemblyDescriptionAttribute));
-					string assemblyDescription = asdescription.Description;
-
 					//the icon is included in this program
 					string iconSourcePath = Path.Combine(System.Windows.Forms.Application.StartupPath, "Graphics\\fileassoc.ico");
 
 					if (!File.Exists(iconSourcePath))
 						return;
 
-					RegistryKey myUninstallKey = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Uninstall");
-					string[] mySubKeyNames = myUninstallKey.GetSubKeyNames();
-					for (int i = 0; i < mySubKeyNames.Length; i++)
+					using (RegistryKey myUninstallKey = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Uninstall"))
 					{
-						RegistryKey myKey = myUninstallKey.OpenSubKey(mySubKeyNames[i], true);
-						object myValue = myKey.GetValue("DisplayName");
-						if (myValue != null && myValue.ToString().ToLower().Contains("bivrost"))
+						if (myUninstallKey == null)
+							return;
+
+						string[] mySubKeyNames = myUninstallKey.GetSubKeyNames();
+						for (int i = 0; i < mySubKeyNames.Length; i++)
 						{
-                            myKey.SetValue("DisplayIcon", iconSourcePath);
-							break;
+							using (RegistryKey myKey = myUninstallKey.OpenSubKey(mySubKeyNames[i], true))
+							{
+								object myValue = myKey?.GetValue("DisplayName");
+								if (myValue != null && myValue.ToString().ToLower().Contains("bivrost"))
+								{
+									myKey.SetValue("DisplayIcon", iconSourcePath);
+									break;
+								}
+							}
 						}
 					}
 				}
-				catch (Exception ex)
+				catch (Exception)
 				{
 					//log an error
 				}
@@ -305,20 +285,20 @@ namespace Bivrost.Bivrost360Player
 
 			//PROTOCOL REGISTRATION
 			try {
-				
-				string publisherName = GetPublisher("Bivrost 360Player");
-				string apppath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs), publisherName, "Bivrost 360Player.appref-ms");
-				RegistryKey myClasses = Registry.CurrentUser.OpenSubKey(@"Software\Classes", true);
-				if(myClasses == null) myClasses = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\Classes", true);
-				RegistryKey bivrostProtocolKey = myClasses.OpenSubKey("bivrost");
-				if (bivrostProtocolKey == null)
-					myClasses.CreateSubKey(@"bivrost\shell\open\command");
-				bivrostProtocolKey = myClasses.OpenSubKey("bivrost", true);
-				bivrostProtocolKey.SetValue("URL Protocol","");
-				RegistryKey commandKey = bivrostProtocolKey.OpenSubKey(@"shell\open\command", true);
-				//commandKey.SetValue("","\"" + System.Reflection.Assembly.GetExecutingAssembly().CodeBase.Substring(8).Replace('/',Path.DirectorySeparatorChar) + "\" --bivrost-protocol \"%1\"");
-				//DEFAULT RUN ARGUMENT 
-				commandKey.SetValue("", runArgument);
+				using (RegistryKey myClasses = Registry.CurrentUser.OpenSubKey(@"Software\Classes", true) ?? Registry.CurrentUser.OpenSubKey(@"SOFTWARE\Classes", true))
+				{
+					if (myClasses != null)
+					{
+						using (RegistryKey commandKey = myClasses.CreateSubKey(@"bivrost\shell\open\command"))
+						{
+							commandKey?.SetValue("", runArgument);
+						}
+						using (RegistryKey bivrostProtocolKey = myClasses.OpenSubKey("bivrost", true))
+						{
+							bivrostProtocolKey?.SetValue("URL Protocol", "");
+						}
+					}
+				}
 			} catch(Exception exc) {
 				logger.Error(exc, "Exception while associating protocol");
 			}

@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Security;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Tasks;
@@ -13,6 +14,8 @@ namespace Bivrost.Bivrost360Player.Streaming
 	{
 		public override bool CanParse(string url)
 		{
+			if (string.IsNullOrWhiteSpace(url))
+				return false;
 			try
 			{
 				// this will throw an ArgumentException if path is incorrect
@@ -23,6 +26,8 @@ namespace Bivrost.Bivrost360Player.Streaming
 			}
 			catch (ArgumentException) { return false; }
 			catch (NotSupportedException) { return false; }
+			catch (PathTooLongException) { return false; }
+			catch (SecurityException) { return false; }
 		}
 
 
@@ -39,28 +44,60 @@ namespace Bivrost.Bivrost360Player.Streaming
                 consideredBytes = (int)fileInfo.Length;
 
             byte[] data = new byte[consideredBytes];
-            fileInfo.OpenRead().Read(data, 0, consideredBytes);
+            using (FileStream fs = fileInfo.OpenRead())
+            {
+                int totalRead = 0;
+                while (totalRead < consideredBytes)
+                {
+                    int read = fs.Read(data, totalRead, consideredBytes - totalRead);
+                    if (read <= 0)
+                        break;
+                    totalRead += read;
+                }
+            }
 
-            SHA1 sha = new SHA1CryptoServiceProvider();
-            byte[] hash = sha.ComputeHash(data);
+            byte[] hash;
+            using (SHA1 sha = SHA1.Create())
+            {
+                hash = sha.ComputeHash(data);
+            }
             string mediaId = $"sha1+len:{string.Concat(Array.ConvertAll(hash, x => x.ToString("x2")))}+{fileInfo.Length}";
 
 			var container = GuessContainerFromExtension(path);
+			var projection = GuessProjectionFromFileName(path);
+			var stereoscopy = GuessStereoscopyFromFileName(path);
+			VR180MeshData customMesh = null;
+
+			if (container == Container.mp4)
+			{
+				VR180MeshParser.InspectMp4File(path, data, ref projection, ref stereoscopy, out customMesh);
+			}
+
+			// Default mode: _LR 180° Equirectangular Side-by-Side
+			if (projection == ProjectionMode.Autodetect)
+			{
+				projection = ProjectionMode.Dome;
+			}
+			if (stereoscopy == VideoMode.Autodetect)
+			{
+				stereoscopy = VideoMode.SideBySide;
+			}
 
 			return new ServiceResult(path, ServiceName, mediaId)
 			{
-				projection = ProjectionMode.Sphere,
-				stereoscopy = GuessStereoscopyFromFileName(uri),
+				projection = projection,
+				stereoscopy = stereoscopy,
+				CustomMesh = customMesh,
 				videoStreams = new List<VideoStream>()
 				{
 					new VideoStream()
 					{
-						url = uri,
+						url = path,
 						hasAudio = true, // TODO
                         container = container
                     }
 				},
-				title = Path.GetFileName(uri),
+				title = Path.GetFileName(path),
 				contentType = GuessContentTypeFromContainer(container)
 			};
 		}

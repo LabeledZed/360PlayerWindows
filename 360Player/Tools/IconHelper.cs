@@ -35,12 +35,21 @@ namespace Bivrost.Bivrost360Player.Tools
 
 		public static void RemoveIcon(Window window)
 		{
+			if (window == null)
+				return;
+
 			// Get this window's handle
 			IntPtr hwnd = new WindowInteropHelper(window).Handle;
+			if (hwnd == IntPtr.Zero)
+				return;
 
 			// Change the extended window style to not show a window icon
 			int extendedStyle = GetWindowLong(hwnd, GWL_EXSTYLE);
 			SetWindowLong(hwnd, GWL_EXSTYLE, extendedStyle | WS_EX_DLGMODALFRAME);
+
+			// Clear inherited small/big window icons
+			SendMessage(hwnd, WM_SETICON, new IntPtr(1), IntPtr.Zero);
+			SendMessage(hwnd, WM_SETICON, IntPtr.Zero, IntPtr.Zero);
 
 			// Update the window's non-client area to reflect the changes
 			SetWindowPos(hwnd, IntPtr.Zero, 0, 0, 0, 0, SWP_NOMOVE |

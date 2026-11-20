@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media.Animation;
+using System.Windows.Threading;
 
 namespace Bivrost.Bivrost360Player
 {
@@ -18,7 +19,7 @@ namespace Bivrost.Bivrost360Player
 		private IInputElement _element;
 		private bool isDragging = false;
 		private DateTime lastMouse;
-		private BackgroundWorker visibilityWorker;
+		private DispatcherTimer visibilityTimer;
 		private bool visible = false;
 		private bool mute = false;
 
@@ -34,8 +35,17 @@ namespace Bivrost.Bivrost360Player
 		{
 			base.OnViewLoaded(view);
 			this.view = view as VolumeControlView;
-			this.view.Opacity = 0;
-			this.view.IsHitTestVisible = false;
+			if (this.view != null)
+			{
+				this.view.Opacity = 0;
+				this.view.IsHitTestVisible = false;
+			}
+		}
+
+		protected override void OnDeactivate(bool close)
+		{
+			visibilityTimer?.Stop();
+			base.OnDeactivate(close);
 		}
 
 		private double _volume = 0.5;
@@ -56,44 +66,52 @@ namespace Bivrost.Bivrost360Player
 
 		public void Show()
 		{
-			lastMouse = DateTime.Now;
+			Execute.OnUIThread(() =>
+			{
+				lastMouse = DateTime.Now;
 
-			if (!visible)
-			{				
-				visible = true;
-				Execute.OnUIThread(() => view.IsHitTestVisible = true);
-				Animate(true);
-
-				visibilityWorker = new BackgroundWorker();
-				visibilityWorker.DoWork += (sender, parameters) =>
+				if (!visible && view != null)
 				{
-					while (visible)
-					{
+					visible = true;
+					view.IsHitTestVisible = true;
+					Animate(true);
 
-						if ((DateTime.Now - lastMouse).TotalSeconds > 2)
+					if (visibilityTimer == null)
+					{
+						visibilityTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
+						visibilityTimer.Tick += (sender, args) =>
 						{
-							Execute.OnUIThread(() => Hide());
-						}
-						else
-							Thread.Sleep(100);
+							if ((DateTime.Now - lastMouse).TotalSeconds > 2)
+							{
+								Hide();
+							}
+						};
 					}
-				};
-				visibilityWorker.RunWorkerAsync();
-			}
+					visibilityTimer.Start();
+				}
+			});
 		}
 
 		public void Hide()
 		{
-			if (visible)
+			Execute.OnUIThread(() =>
 			{
-				visible = false;
-				view.IsHitTestVisible = false;
-				Animate(false);
-			}
+				visibilityTimer?.Stop();
+				if (visible)
+				{
+					visible = false;
+					if (view != null)
+					{
+						view.IsHitTestVisible = false;
+						Animate(false);
+					}
+				}
+			});
 		}
 
 		private void Animate(bool visible)
 		{
+			if (view == null) return;
 			Storyboard storyboard = new Storyboard();
 			DoubleAnimation opacityAnimation = new DoubleAnimation() { From = view.Opacity, To = visible ? 1 : 0, Duration = TimeSpan.FromSeconds(0.5) };
 			Storyboard.SetTarget(opacityAnimation, view);
@@ -113,11 +131,11 @@ namespace Bivrost.Bivrost360Player
 
 		public void MouseDown(object sender, MouseButtonEventArgs eventArgs)
 		{
+			if (view == null) return;
 			PositionToVolume(eventArgs.GetPosition(view).Y);
 
-			_element = (IInputElement)eventArgs.Source;
-			_element.CaptureMouse();
-			_element.MouseMove += MouseMove;
+			_element = eventArgs.Source as IInputElement;
+			_element?.CaptureMouse();
 
 			isDragging = true;
 			eventArgs.Handled = true;
@@ -128,10 +146,23 @@ namespace Bivrost.Bivrost360Player
 			mute = !mute;
 			OnVolumeChange(Volume);
 			NotifyOfPropertyChange(() => Volume);
+			NotifyOfPropertyChange(() => IsMuted);
+		}
+
+		public void AdjustVolume(double delta)
+		{
+			if (Math.Abs(delta) < 1e-6) return;
+			if (mute && delta > 0)
+			{
+				mute = false;
+				NotifyOfPropertyChange(() => IsMuted);
+			}
+			Volume = Math.Max(0.0, Math.Min(1.0, this._volume + delta));
 		}
 
 		private void PositionToVolume(double position)
 		{
+			if (view == null || view.ActualHeight <= 0) return;
 			//54 / 86
 			double ratio = view.ActualHeight / 86;
 			double margin = (86 - 54) * ratio * 0.5;
@@ -142,7 +173,7 @@ namespace Bivrost.Bivrost360Player
 
 		public void MouseMove(object sender, MouseEventArgs eventArgs)
 		{
-			if (isDragging)
+			if (isDragging && view != null)
 			{
 				PositionToVolume(eventArgs.GetPosition(view).Y);
 			}
@@ -151,9 +182,10 @@ namespace Bivrost.Bivrost360Player
 
 		public void MouseUp(object sender, MouseButtonEventArgs eventArgs)
 		{
-			if (isDragging && _element != null)
+			if (isDragging)
 			{
-				_element.ReleaseMouseCapture();
+				_element?.ReleaseMouseCapture();
+				_element = null;
 				isDragging = false;
 			}
 		}

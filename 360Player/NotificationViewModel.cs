@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media.Animation;
+using System.Windows.Threading;
 
 namespace Bivrost.Bivrost360Player
 {
@@ -17,7 +18,7 @@ namespace Bivrost.Bivrost360Player
 		public event Action<NotificationViewModel> OnClose = delegate { };
 		private float _timeout = 5f;
 		private float _currentTime = 5f;
-		private BackgroundWorker _closeOnTimeoutWorker;
+		private DispatcherTimer _closeTimer;
 		private NotificationView _view;
 		private bool _animatedClosing = false;
 		private System.Action _userAction = null;
@@ -30,18 +31,6 @@ namespace Bivrost.Bivrost360Player
 			ActionLabel = linkLabel;
 			this._timeout = timeout;
 			this._currentTime = _timeout;
-
-			_closeOnTimeoutWorker = new BackgroundWorker();
-			_closeOnTimeoutWorker.DoWork += (s,e) =>
-			{
-				while(_currentTime > 0)
-				{
-					_currentTime -= 0.1f;
-					Thread.Sleep(100);
-				}
-			};
-			_closeOnTimeoutWorker.RunWorkerCompleted += (s, e) => AnimateClose();
-			_closeOnTimeoutWorker.RunWorkerAsync();
 		}
 
 		public NotificationViewModel(string message, System.Action userAction, string actionLabel = "", float timeout = 10f)
@@ -53,24 +42,29 @@ namespace Bivrost.Bivrost360Player
 			this._timeout = timeout;
 			this._currentTime = _timeout;
 			this._userAction = userAction;
-
-			_closeOnTimeoutWorker = new BackgroundWorker();
-			_closeOnTimeoutWorker.DoWork += (s, e) =>
-			{
-				while (_currentTime > 0)
-				{
-					_currentTime -= 0.1f;
-					Thread.Sleep(100);
-				}
-			};
-			_closeOnTimeoutWorker.RunWorkerCompleted += (s, e) => AnimateClose();
-			_closeOnTimeoutWorker.RunWorkerAsync();
 		}
 
 		protected override void OnViewLoaded(object view)
 		{
 			base.OnViewLoaded(view);
 			_view = view as NotificationView;
+			StartCloseTimer();
+		}
+
+		private void StartCloseTimer()
+		{
+			if (_closeTimer != null) return;
+			_closeTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
+			_closeTimer.Tick += (s, e) =>
+			{
+				_currentTime -= 0.1f;
+				if (_currentTime <= 0)
+				{
+					_closeTimer.Stop();
+					AnimateClose();
+				}
+			};
+			_closeTimer.Start();
 		}
 
 		public string Message { get; set; }
@@ -91,7 +85,11 @@ namespace Bivrost.Bivrost360Player
 			e.Handled = true;
 			if(!string.IsNullOrWhiteSpace(Url))
 			{
-				System.Diagnostics.Process.Start(Url);
+				try
+				{
+					System.Diagnostics.Process.Start(Url);
+				}
+				catch (Exception) { }
 			}
 			if (_userAction != null)
 			{	
@@ -103,6 +101,8 @@ namespace Bivrost.Bivrost360Player
 		public void Close()
 		{
 			if (_animatedClosing) return;
+			_animatedClosing = true;
+			_closeTimer?.Stop();
 			OnClose(this);
 		}
 
@@ -110,6 +110,14 @@ namespace Bivrost.Bivrost360Player
 		{
 			Execute.OnUIThread(() =>
 			{
+				if (_animatedClosing) return;
+				_animatedClosing = true;
+				_closeTimer?.Stop();
+				if (_view == null)
+				{
+					OnClose(this);
+					return;
+				}
 				Storyboard storyboard = new Storyboard();
 				DoubleAnimation opacityAnimation = new DoubleAnimation(1, 0, new Duration(TimeSpan.FromSeconds(0.5f)));
 				opacityAnimation.EasingFunction = new QuadraticEase() { EasingMode = EasingMode.EaseInOut };

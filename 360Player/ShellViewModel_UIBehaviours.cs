@@ -67,7 +67,7 @@ namespace Bivrost.Bivrost360Player
 				Storyboard.SetTargetProperty(opacityAnimatiion, new PropertyPath("Opacity"));
 				storyboard.Children.Add(opacityAnimatiion);
 
-				DoubleAnimation opacityProgressAnimation = new DoubleAnimation() { From = shellView.SelectedFileNameLabel.Opacity, To = 0, Duration = TimeSpan.FromSeconds(animTime) };
+				DoubleAnimation opacityProgressAnimation = new DoubleAnimation() { From = shellView.VideoProgressBar.Opacity, To = 0, Duration = TimeSpan.FromSeconds(animTime) };
 				Storyboard.SetTarget(opacityProgressAnimation, shellView.VideoProgressBar);
 				Storyboard.SetTargetProperty(opacityProgressAnimation, new PropertyPath("Opacity"));
 				storyboard.Children.Add(opacityProgressAnimation);
@@ -104,7 +104,7 @@ namespace Bivrost.Bivrost360Player
 				Storyboard.SetTargetProperty(opacityAnimatiion, new PropertyPath("Opacity"));
 				storyboard.Children.Add(opacityAnimatiion);
 
-				DoubleAnimation opacityProgressAnimation = new DoubleAnimation() { From = shellView.SelectedFileNameLabel.Opacity, To = 1, Duration = TimeSpan.FromSeconds(animTime) };
+				DoubleAnimation opacityProgressAnimation = new DoubleAnimation() { From = shellView.VideoProgressBar.Opacity, To = 1, Duration = TimeSpan.FromSeconds(animTime) };
 				Storyboard.SetTarget(opacityProgressAnimation, shellView.VideoProgressBar);
 				Storyboard.SetTargetProperty(opacityProgressAnimation, new PropertyPath("Opacity"));
 				storyboard.Children.Add(opacityProgressAnimation);
@@ -307,12 +307,12 @@ namespace Bivrost.Bivrost360Player
 
 		public void ChangeFovZoomIn()
 		{
-			ChangeFov(new System.Windows.Input.MouseWheelEventArgs(null, 0, 120));
+			ChangeFovDeg(-5f);
 		}
 
 		public void ChangeFovZoomOut()
 		{
-			ChangeFov(new System.Windows.Input.MouseWheelEventArgs(null, 0, -120));
+			ChangeFovDeg(5f);
         }
 
 		public void Dummy(RoutedEventArgs e)
@@ -378,12 +378,9 @@ namespace Bivrost.Bivrost360Player
 
         public void SeekRelative(int v)
         {
-            if(_mediaDecoder != null)
+            if (_mediaDecoder != null && _mediaDecoder.Initialized && _mediaDecoder.Ready && _mediaDecoder.IsPlaying && !_mediaDecoder.IsDisplayingStaticContent)
             {
-                if(_mediaDecoder.Initialized && _mediaDecoder.Ready)
-                {
-                    _mediaDecoder.Seek(_mediaDecoder.CurrentPosition + v);
-                }
+                _mediaDecoder.SeekRelative(v);
             }
         }
 

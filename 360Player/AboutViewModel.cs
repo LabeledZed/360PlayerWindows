@@ -51,13 +51,21 @@ namespace Bivrost.Bivrost360Player
 		public void ContactSupport()
 		{
 			//mailto:someone@example.com?subject=This%20is%20the%20subject&cc=someone_else@example.com&body=This%20is%20the%20body
-			System.Diagnostics.Process.Start("mailto:support@bivrost360.com");
+			try
+			{
+				System.Diagnostics.Process.Start("mailto:support@bivrost360.com");
+			}
+			catch (Exception) { }
 			//SystemInfo.Info();
 		}
 
 		public void ContactCommercial()
 		{
-			System.Diagnostics.Process.Start("mailto:contact@bivrost360.com");
+			try
+			{
+				System.Diagnostics.Process.Start("mailto:contact@bivrost360.com");
+			}
+			catch (Exception) { }
 		}
 	}
 }

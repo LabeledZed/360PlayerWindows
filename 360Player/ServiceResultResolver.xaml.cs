@@ -23,23 +23,41 @@ namespace Bivrost.Bivrost360Player
 		{
 			var window = new ServiceResultResolver(owner);
 
+			object sync = new object();
 			ServiceResult result = null;
 			bool closed = false;
+			bool completed = false;
 
 			var task = Task.Run(() =>
 			{
-                //result = StreamingFactory.Instance.GetStreamingInfo(uri);
-                result = ProcessURI(uri);
-                if (closed)
+				var resolved = ProcessURI(uri, () =>
+				{
+					lock (sync) { return closed; }
+				});
+
+				bool shouldClose = false;
+				lock (sync)
+				{
+					if (!closed)
+					{
+						result = resolved;
+						completed = true;
+						shouldClose = true;
+					}
+				}
+
+				if (!shouldClose)
 					log.Info($"Streaming result resolving was cancelled before completion. Uri={uri}.");
 				else
 					window.Dispatcher.InvokeAsync(() => window.Close());
 			});
 
 			window.ShowDialog();
-			closed = true;
-
-			return result;
+			lock (sync)
+			{
+				closed = true;
+				return completed ? result : null;
+			}
 		}
 
 		private void Cancel_Click(object sender, RoutedEventArgs e)
@@ -53,37 +71,43 @@ namespace Bivrost.Bivrost360Player
 		/// </summary>
 		/// <param name="uri"></param>
 		/// <returns>ServiceResult with parsed streaming information or null</returns>
-		protected static ServiceResult ProcessURI(string uri)
+		protected static ServiceResult ProcessURI(string uri, System.Func<bool> isCancelled = null)
 		{
+			void NotifyIfActive(string msg)
+			{
+				if (isCancelled == null || !isCancelled())
+					Logic.Notify(msg);
+			}
+
 			try
 			{
 				var sr = Streaming.StreamingFactory.Instance.GetStreamingInfo(uri);
 
 				// no error, but nothing found (probably couldn't parse)
 				if (sr == null)
-					Logic.Notify("Url is not valid video or recognised streaming service address.");
+					NotifyIfActive("Url is not valid video or recognised streaming service address.");
 
 				return sr;
 			}
 			catch (Streaming.StreamNotSupported exc)
 			{
 				log.Error(exc, "Streaming: video not supported: " + uri);
-				Logic.Notify("Video not yet supported.");
+				NotifyIfActive("Video not yet supported.");
 			}
 			catch (Streaming.StreamParsingFailed exc)
 			{
 				log.Error(exc, "Streaming: Parsing failed. Unable to open the video: " + uri);
-				Logic.Notify("Parsing failed. Unable to open the video.");
+				NotifyIfActive("Parsing failed. Unable to open the video.");
 			}
 			catch (Streaming.StreamNetworkFailure exc)
 			{
 				log.Error(exc, "Streaming: Network/file failure. Unable to open the video: " + uri);
-				Logic.Notify("This file is currently unavailable.");
+				NotifyIfActive("This file is currently unavailable.");
 			}
 			catch (System.Exception exc)
 			{
 				log.Error(exc, "Streaming: media not supported: " + uri);
-				Logic.Notify("Media not supported.");
+				NotifyIfActive("Media not supported.");
 			}
 
 			return null;

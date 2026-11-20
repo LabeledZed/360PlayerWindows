@@ -118,7 +118,7 @@ namespace Bivrost.Bivrost360Player
 
 			return new Matrix(
 				m.M11, m.M13, m.M12, m.M14,
-				m.M32, m.M33, m.M32, m.M34,
+				m.M31, m.M33, m.M32, m.M34,
 				m.M21, m.M23, m.M22, m.M24,
 				m.M41, m.M43, m.M42, m.M44
 			);
@@ -231,7 +231,7 @@ namespace Bivrost.Bivrost360Player
 				result |= OVRTypes.TextureBindFlags.DX_RenderTarget;
 
 			if (bindFlags.HasFlag(SharpDX.Direct3D11.BindFlags.UnorderedAccess))
-				result |= OVRTypes.TextureBindFlags.DX_DepthStencil;
+				result |= OVRTypes.TextureBindFlags.DX_UnorderedAccess;
 
 			return result;
 		}

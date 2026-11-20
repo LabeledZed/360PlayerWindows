@@ -11,24 +11,26 @@ namespace Bivrost.Bivrost360Player.Tools
 {
 	public class GraphicTools
 	{
+		private static readonly Dictionary<int, Vector4> FacebookCubeMap = new Dictionary<int, Vector4>
+		{
+			{ 2, new Vector4(3f, 0f / 3f, 2f, 0f) },
+			{ 3, new Vector4(3f, 1f / 3f, 2f, 0f) },
+			{ 4, new Vector4(3f, 2f / 3f, 2f, 0f) },
+			{ 5, new Vector4(3f, 0f / 3f, 2f, 1f / 2f) },
+			{ 1, new Vector4(3f, 1f / 3f, 2f, 1f / 2f) },
+			{ 0, new Vector4(3f, 2f / 3f, 2f, 1f / 2f) }
+		};
+
 		public static Vector2 MapCubeFacebook(int index, Vector2 vector)
 		{
 			Vector2 vector2 = vector;
 			if (index == 5)
-				vector2 = new Vector2(1 - vector.X, 1 - vector.Y);			
+				vector2 = new Vector2(1 - vector.X, 1 - vector.Y);
 
-			Dictionary<int, Vector4> map = new Dictionary<int, Vector4>();
-
-			map.Add(2, new Vector4(3f, 0f / 3f, 2f, 0f));
-			map.Add(3, new Vector4(3f, 1f / 3f, 2f, 0f));
-			map.Add(4, new Vector4(3f, 2f / 3f, 2f, 0f));
-			map.Add(5, new Vector4(3f, 0f / 3f, 2f, 1f / 2f));
-			map.Add(1, new Vector4(3f, 1f / 3f, 2f, 1f / 2f));
-			map.Add(0, new Vector4(3f, 2f / 3f, 2f, 1f / 2f));
-
+			Vector4 mapping = FacebookCubeMap[index];
 			return new Vector2(
-				vector2.X / map[index].X + map[index].Y,
-				vector2.Y / map[index].Z + map[index].W
+				vector2.X / mapping.X + mapping.Y,
+				vector2.Y / mapping.Z + mapping.W
 				);
 		}
 
@@ -77,101 +79,168 @@ namespace Bivrost.Bivrost360Player.Tools
 		}
 
 
-		private static GeometricPrimitive GenerateDome(GraphicsDevice graphicsDevice, bool toLeftHanded)
+		/// <summary>
+		/// Maps a 360° sphere UV coordinate (where front hemisphere has u in [0.25, 0.75], v in [0, 1])
+		/// to a 180° Equirectangular (Dome / VR180 / _LR) UV coordinate in [0, 1] x [0, 1].
+		/// </summary>
+		public static Vector2 ComputeEquirectangular180UV(Vector2 sphereUV)
 		{
-			//const int vslices = 2;
-			//const int hslices = vslices * 2;
-			//const float radius = 6f;
-			//Vector3 forward = toLeftHanded ? Vector3.ForwardLH : Vector3.ForwardRH;
+			float u = MathUtil.Clamp(sphereUV.X * 2f - 0.5f, 0f, 1f);
+			float v = MathUtil.Clamp(sphereUV.Y, 0f, 1f);
+			return new Vector2(u, v);
+		}
 
-			//VertexPositionNormalTexture[] data = new VertexPositionNormalTexture[(hslices + 1) * (vslices + 1)];
-			//for (int horiz = 0; horiz <= hslices; horiz++)      // +1 (<=) h slice for the same points with X = 0 and X = 1
-			//	for (int vert = 0; vert <= vslices; vert++)		// +1 (<=) slice for bottom cap points
-			//	{
-			//		int idx = vert * hslices + horiz;
-			//		float yaw = (float)((Math.PI * 2 * horiz) / hslices);
-			//		float pitch = (float)((Math.PI * vert) / vslices - Math.PI / 2);
-			//		data[idx] = new VertexPositionNormalTexture();
-			//		Vector3 n = Vector3.Transform(forward, Quaternion.RotationYawPitchRoll(yaw, pitch, 0f));
+		/// <summary>
+		/// Maps a 360° sphere UV coordinate (where front hemisphere has u in [0.25, 0.75], v in [0, 1])
+		/// to a 180° equidistant circular Fisheye / Dual-Fisheye UV coordinate in [0, 1] x [0, 1].
+		/// </summary>
+		public static Vector2 ComputeFisheye180UV(Vector2 sphereUV, float fovDegrees = 180f)
+		{
+			if (fovDegrees <= 1f)
+				fovDegrees = 180f;
 
-			//		data[idx].Normal = n;
-			//		data[idx].Position = n * radius;
-			//		data[idx].TextureCoordinate.X = horiz / (float)hslices;
-			//		data[idx].TextureCoordinate.Y = 1 - vert / (float)vslices;
-			//	}
+			double yaw = (sphereUV.X - 0.5) * (2.0 * Math.PI);
+			double pitch = (0.5 - sphereUV.Y) * Math.PI;
 
-			//short[] indices = new short[6 * hslices * vslices];
-			//for (int v = 0; v < vslices; v++)
-			//	for (int h = 0; h < hslices; h++)
-			//	{
-			//		int idx = 6 * (v * hslices + h) - 3;
+			double cosPitch = Math.Cos(pitch);
+			double nx = cosPitch * Math.Sin(yaw);
+			double ny = Math.Sin(pitch);
+			double nz = cosPitch * Math.Cos(yaw);
 
-			//		// A---B   triangles:
-			//		// | / |   ABC, BDC
-			//		// C---D   ACB, BCD
+			double rho = Math.Sqrt(nx * nx + ny * ny);
+			if (rho < 1e-7)
+			{
+				return new Vector2(0.5f, 0.5f);
+			}
 
-			//		// no need for modulo - indices are [hslices+1, vslices+1]
-			//		short idxA = (short)(v * hslices + h);
-			//		short idxB = (short)(v * hslices + (h + 1));
-			//		short idxC = (short)((v + 1) * hslices + h);
-			//		short idxD = (short)((v + 1) * hslices + (h + 1));
+			double theta = Math.Atan2(rho, nz); // Angle from forward optical axis [0, pi/2]
+			double halfFovRad = (fovDegrees * Math.PI) / 360.0;
+			double r = theta / halfFovRad;
 
-			//		// not first v slice (top cap)
-			//		if (v > 0)
-			//		{
-			//			indices[idx] = idxA;
-			//			indices[idx + 1] = idxC;
-			//			indices[idx + 2] = idxB;
-			//		}
+			double u = 0.5 + 0.5 * r * (nx / rho);
+			double v = 0.5 - 0.5 * r * (ny / rho);
 
-			//		// not last v slice (bottom cap)
-			//		if (v < vslices - 1)
-			//		{
-			//			indices[idx + 3] = idxB;
-			//			indices[idx + 4] = idxC;
-			//			indices[idx + 5] = idxD;
-			//		}
-			//	}
+			return new Vector2(
+				MathUtil.Clamp((float)u, 0f, 1f),
+				MathUtil.Clamp((float)v, 0f, 1f));
+		}
 
-			//return new GeometricPrimitive(graphicsDevice, data, indices);
+		/// <summary>
+		/// Maps a 360° sphere UV coordinate (where front hemisphere has u in [0.25, 0.75], v in [0, 1])
+		/// to a VR180 Mesh-Projected (Equi-Angular / lens-distortion-compensated 180°) UV coordinate in [0, 1] x [0, 1].
+		/// </summary>
+		public static Vector2 ComputeMesh180UV(Vector2 sphereUV)
+		{
+			// Normalized front-hemisphere angular coordinates in [-1, 1]
+			double ax = MathUtil.Clamp(sphereUV.X * 4f - 2f, -1f, 1f);
+			double ay = MathUtil.Clamp(1f - sphereUV.Y * 2f, -1f, 1f);
 
+			// Equi-Angular VR180 mesh curve: boosts center optical resolution and unwarps peripheral compression
+			const double kappa = 1.15;
+			double invAtanKappa = 1.0 / Math.Atan(kappa);
+
+			double mappedX = Math.Atan(kappa * ax) * invAtanKappa;
+			double mappedY = Math.Atan(kappa * ay) * invAtanKappa;
+
+			float u = MathUtil.Clamp((float)(0.5 + 0.5 * mappedX), 0f, 1f);
+			float v = MathUtil.Clamp((float)(0.5 - 0.5 * mappedY), 0f, 1f);
+			return new Vector2(u, v);
+		}
+
+		private static GeometricPrimitive GenerateHemisphere(
+			GraphicsDevice graphicsDevice,
+			bool toLeftHanded,
+			Func<Vector2, Vector2> uvMapper)
+		{
 			using (GeometricPrimitive primitive = GeometricPrimitive.Sphere.New(graphicsDevice, 50, 64, toLeftHanded))
 			{
-
-				short[] indices = primitive.IndexBuffer.GetData<short>();
+				short[] sourceIndices = primitive.IndexBuffer.GetData<short>();
 				var data = primitive.VertexBuffer.GetData();
+
+				Vector2[] originalUVs = new Vector2[data.Length];
+				bool[] isPole = new bool[data.Length];
 
 				for (int it = 0; it < data.Length; it++)
 				{
-					var u = data[it].TextureCoordinate.X * 2 - 0.5f;
-
-					// reverse
-					//if (x > 1)
-					//	x = x - 1;
-
-					// mirror
-					//if (x > 1)
-					//	x = 2 - x;
-
-					data[it].TextureCoordinate.X = u;
-
-					//var z = data[it].Position.Z;
-					//data[it].Position.Z = -data[it].Position.X;
-					//data[it].Position.X = z;
-
-					//z = data[it].Normal.Z;
-					//data[it].Normal.Z = -data[it].Normal.X;
-					//data[it].Normal.X = z;
+					Vector2 uv = data[it].TextureCoordinate;
+					originalUVs[it] = uv;
+					isPole[it] = uv.Y <= 1e-4f || uv.Y >= 1f - 1e-4f || Math.Abs(data[it].Normal.Y) >= 0.9999f;
+					if (isPole[it])
+					{
+						uv.X = 0.5f;
+					}
+					data[it].TextureCoordinate = uvMapper(uv);
 				}
 
-				// remove edges (requires mirror or reverse)
-				//indices = indices.ToList().FindAll(i => data[i].TextureCoordinate.X > 0.05f && data[i].TextureCoordinate.X < 0.95f).ToArray();
+				// Keep only triangle triplets (i0, i1, i2) belonging to the front 180° hemisphere (u360 in [0.25, 0.75])
+				// so the back 180° hemisphere renders black instead of tiling/stretching the front texture.
+				List<short> frontIndices = new List<short>(sourceIndices.Length / 2 + 384);
+				const float minFrontU = 0.25f - 1e-4f;
+				const float maxFrontU = 0.75f + 1e-4f;
 
-				// remove back (do not use with mirror or reverse)
-				//indices = indices.ToList().FindAll(i => data[i].TextureCoordinate.X <= 1).ToArray();
+				for (int t = 0; t + 2 < sourceIndices.Length; t += 3)
+				{
+					short i0 = sourceIndices[t];
+					short i1 = sourceIndices[t + 1];
+					short i2 = sourceIndices[t + 2];
 
-				return new GeometricPrimitive(graphicsDevice, data, indices);
+					bool v0Front = isPole[i0] || (originalUVs[i0].X >= minFrontU && originalUVs[i0].X <= maxFrontU);
+					bool v1Front = isPole[i1] || (originalUVs[i1].X >= minFrontU && originalUVs[i1].X <= maxFrontU);
+					bool v2Front = isPole[i2] || (originalUVs[i2].X >= minFrontU && originalUVs[i2].X <= maxFrontU);
+
+					if (v0Front && v1Front && v2Front)
+					{
+						frontIndices.Add(i0);
+						frontIndices.Add(i1);
+						frontIndices.Add(i2);
+					}
+				}
+
+				short[] finalIndices = frontIndices.Count >= 3 ? frontIndices.ToArray() : sourceIndices;
+				return new GeometricPrimitive(graphicsDevice, data, finalIndices);
 			}
+		}
+
+		public static GeometricPrimitive GenerateDome(GraphicsDevice graphicsDevice, bool toLeftHanded)
+		{
+			return GenerateHemisphere(graphicsDevice, toLeftHanded, ComputeEquirectangular180UV);
+		}
+
+		public static GeometricPrimitive GenerateFisheye180(GraphicsDevice graphicsDevice, bool toLeftHanded, float fovDegrees = 180f)
+		{
+			return GenerateHemisphere(graphicsDevice, toLeftHanded, uv => ComputeFisheye180UV(uv, fovDegrees));
+		}
+
+		public static GeometricPrimitive GenerateMeshProjected180(GraphicsDevice graphicsDevice, bool toLeftHanded)
+		{
+			var customMesh = MediaDecoder.Instance?.CurrentServiceResult?.CustomMesh;
+			if (customMesh != null && customMesh.IsValid)
+			{
+				var srcVertices = customMesh.Vertices;
+				var srcIndices = customMesh.Indices;
+				var vertices = new VertexPositionNormalTexture[srcVertices.Length];
+				var indices = new short[srcIndices.Length];
+				Array.Copy(srcVertices, vertices, srcVertices.Length);
+				Array.Copy(srcIndices, indices, srcIndices.Length);
+
+				if (toLeftHanded)
+				{
+					for (int i = 0; i < vertices.Length; i++)
+					{
+						vertices[i].Position.Z = -vertices[i].Position.Z;
+						vertices[i].Normal.Z = -vertices[i].Normal.Z;
+					}
+					for (int t = 0; t + 2 < indices.Length; t += 3)
+					{
+						short tmp = indices[t];
+						indices[t] = indices[t + 2];
+						indices[t + 2] = tmp;
+					}
+				}
+				return new GeometricPrimitive(graphicsDevice, vertices, indices);
+			}
+
+			return GenerateHemisphere(graphicsDevice, toLeftHanded, ComputeMesh180UV);
 		}
 
 
@@ -179,15 +248,21 @@ namespace Bivrost.Bivrost360Player.Tools
 		{
 			switch (projection)
 			{
-				case ProjectionMode.Autodetect:
 				case ProjectionMode.Sphere:
 					return GeometricPrimitive.Sphere.New(graphicsDevice, 6, 64, toLeftHanded);
 
 				case ProjectionMode.CubeFacebook:
 					return GenerateFacebookCube(graphicsDevice, toLeftHanded);
 
+				case ProjectionMode.Autodetect:
 				case ProjectionMode.Dome:
 					return GenerateDome(graphicsDevice, toLeftHanded);
+
+				case ProjectionMode.Fisheye180:
+					return GenerateFisheye180(graphicsDevice, toLeftHanded);
+
+				case ProjectionMode.Mesh180:
+					return GenerateMeshProjected180(graphicsDevice, toLeftHanded);
 
 				default:
 					throw new ArgumentException("Unknown projection: " + projection);
@@ -232,7 +307,8 @@ namespace Bivrost.Bivrost360Player.Tools
 			else
 			{
 				yaw = Math.Atan2(2 * (q.Y * q.Z + q.W * q.X), q.W * q.W - q.X * q.X - q.Y * q.Y + q.Z * q.Z);
-				pitch = Math.Asin(-2 * (q.X * q.Z - q.W * q.Y));
+				double sinPitch = Math.Max(-1.0, Math.Min(1.0, -2 * (q.X * q.Z - q.W * q.Y)));
+				pitch = Math.Asin(sinPitch);
 				//roll = Math.Atan2(2 * (q.X * q.Y + q.W * q.Z), q.W * q.W + q.X * q.X - q.Y * q.Y - q.Z * q.Z);
 			}
 

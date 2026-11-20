@@ -15,6 +15,8 @@ namespace Bivrost
 
 		public void Enqueue(Action a)
 		{
+			if (a == null)
+				throw new ArgumentNullException(nameof(a));
 			actions.Enqueue(a);
 		}
 
@@ -29,8 +31,9 @@ namespace Bivrost
 
 		public void RunAllActions()
 		{
+			int count = actions.Count;
 			Action action;
-			while (actions.TryDequeue(out action))
+			for (int i = 0; i < count && actions.TryDequeue(out action); i++)
 				action();
 		}
 

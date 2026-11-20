@@ -29,14 +29,14 @@ namespace Bivrost.Bivrost360Player.Tools
 
 		// Regular expressions
 		private static System.Text.RegularExpressions.Regex _versionRegex =
-		  new System.Text.RegularExpressions.Regex(@"Version=(?<Major>\d*)." +
-		  @"(?<Minor>\d*).(?<Build>\d*).(?<Revision>\d*)",
+		  new System.Text.RegularExpressions.Regex(@"Version=(?<Major>\d+)\." +
+		  @"(?<Minor>\d+)\.(?<Build>\d+)\.(?<Revision>\d+)",
 		  System.Text.RegularExpressions.RegexOptions.Compiled);
 		private static System.Text.RegularExpressions.Regex _cultureRegex =
-		  new System.Text.RegularExpressions.Regex(@", Culture=(?<Culture>[^,]*),",
+		  new System.Text.RegularExpressions.Regex(@", Culture=(?<Culture>[^,]*)",
 		  System.Text.RegularExpressions.RegexOptions.Compiled);
 		private static System.Text.RegularExpressions.Regex _publicKeyTokenRegex =
-		  new System.Text.RegularExpressions.Regex(@", PublicKeyToken=(?<PublicKeyToken>[^,]*),",
+		  new System.Text.RegularExpressions.Regex(@", PublicKeyToken=(?<PublicKeyToken>[^,]*)",
 		  System.Text.RegularExpressions.RegexOptions.Compiled);
 		private static System.Text.RegularExpressions.Regex _processorArchitectureRegex =
 		  new System.Text.RegularExpressions.Regex(@", processorArchitecture=(?<ProcessorArchitecture>[^,]*)",
@@ -105,26 +105,36 @@ namespace Bivrost.Bivrost360Player.Tools
 
 				this.IdentityType = identityType;
 
+				if (string.IsNullOrEmpty(identity))
+					return;
+
 				try
 				{
 					// Parse application name
-					this.ApplicationName = identity.Substring(0, identity.IndexOf(','));
+					int commaIdx = identity.IndexOf(',');
+					this.ApplicationName = commaIdx >= 0 ? identity.Substring(0, commaIdx) : identity;
 
 					// Parse version
 					regexMatch = _versionRegex.Match(identity);
-					this.Version = new System.Version(int.Parse(regexMatch.Groups["Major"].ToString()),
-													 int.Parse(regexMatch.Groups["Minor"].ToString()),
-													 int.Parse(regexMatch.Groups["Build"].ToString()),
-													 int.Parse(regexMatch.Groups["Revision"].ToString()));
+					if (regexMatch.Success)
+					{
+						this.Version = new System.Version(int.Parse(regexMatch.Groups["Major"].Value),
+														 int.Parse(regexMatch.Groups["Minor"].Value),
+														 int.Parse(regexMatch.Groups["Build"].Value),
+														 int.Parse(regexMatch.Groups["Revision"].Value));
+					}
 
 					// Parse public key token
 					regexMatch = _publicKeyTokenRegex.Match(identity);
-					this.PublicKeyToken = regexMatch.Groups["PublicKeyToken"].ToString();
+					if (regexMatch.Success)
+					{
+						this.PublicKeyToken = regexMatch.Groups["PublicKeyToken"].Value;
+					}
 
 					// Parse processor architecture
 					regexMatch = _processorArchitectureRegex.Match(identity);
-					if (!System.Enum.TryParse<System.Reflection.ProcessorArchitecture>(
-							regexMatch.Groups["ProcessorArchitecture"].ToString(), true, out architecture))
+					if (!regexMatch.Success || !System.Enum.TryParse<System.Reflection.ProcessorArchitecture>(
+							regexMatch.Groups["ProcessorArchitecture"].Value, true, out architecture))
 					{
 						architecture = System.Reflection.ProcessorArchitecture.None;
 					}

@@ -24,5 +24,20 @@ namespace Bivrost.Bivrost360Player
 			InitializeComponent();
 		}
 
+		protected override void OnClosed(EventArgs e)
+		{
+			base.OnClosed(e);
+			try
+			{
+				ShellViewModel.Instance?.ForceShutdownOnWindowClose();
+			}
+			catch (Exception) { }
+			try
+			{
+				BivrostBootstrapper.ReleaseSingleInstanceMutex();
+			}
+			catch (Exception) { }
+			Environment.Exit(0);
+		}
 	}
 }

@@ -9,7 +9,7 @@
     <AppDesignerFolder>Properties</AppDesignerFolder>
     <RootNamespace>Bivrost.Bivrost360Player</RootNamespace>
     <AssemblyName>BivrostPlayer</AssemblyName>
-    <TargetFrameworkVersion>v4.6.1</TargetFrameworkVersion>
+    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
     <FileAlignment>512</FileAlignment>
     <ProjectTypeGuids>{60dc8134-eba5-43b8-bcc9-bb4bc16c2548};{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}</ProjectTypeGuids>
     <WarningLevel>4</WarningLevel>
@@ -134,13 +134,13 @@
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Release-Canary|x64'">
     <OutputPath>bin\x64\Release-Canary\</OutputPath>
-    <DefineConstants>TRACE;CANARY NET45</DefineConstants>
+    <DefineConstants>TRACE;CANARY;NET45</DefineConstants>
     <Optimize>true</Optimize>
     <DebugType>pdbonly</DebugType>
     <PlatformTarget>x64</PlatformTarget>
     <ErrorReport>prompt</ErrorReport>
     <CodeAnalysisRuleSet>MinimumRecommendedRules.ruleset</CodeAnalysisRuleSet>
-    <Prefer32Bit>true</Prefer32Bit>
+    <Prefer32Bit>false</Prefer32Bit>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Release-Stable|AnyCPU'">
     <OutputPath>bin\Release-Stable\</OutputPath>
@@ -162,7 +162,7 @@
     <PlatformTarget>x64</PlatformTarget>
     <ErrorReport>prompt</ErrorReport>
     <CodeAnalysisRuleSet>MinimumRecommendedRules.ruleset</CodeAnalysisRuleSet>
-    <Prefer32Bit>true</Prefer32Bit>
+    <Prefer32Bit>false</Prefer32Bit>
   </PropertyGroup>
   <ItemGroup>
     <Reference Include="Caliburn.Micro, Version=2.0.2.0, Culture=neutral, PublicKeyToken=8e5891231f2ed21f, processorArchitecture=MSIL">
@@ -280,11 +280,8 @@
     <Reference Include="System.Runtime.InteropServices.WindowsRuntime" />
     <Reference Include="System.Runtime.WindowsRuntime, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089, processorArchitecture=MSIL">
       <SpecificVersion>False</SpecificVersion>
-      <HintPath>C:\Program Files (x86)\Reference Assemblies\Microsoft\Framework\.NETCore\v4.5\System.Runtime.WindowsRuntime.dll</HintPath>
-    </Reference>
-    <Reference Include="System.Runtime.WindowsRuntime.UI.Xaml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089, processorArchitecture=MSIL">
-      <SpecificVersion>False</SpecificVersion>
-      <HintPath>C:\Program Files (x86)\Reference Assemblies\Microsoft\Framework\.NETCore\v4.5\System.Runtime.WindowsRuntime.UI.Xaml.dll</HintPath>
+      <HintPath>$(SystemRoot)\Microsoft.NET\Framework\v4.0.30319\System.Runtime.WindowsRuntime.dll</HintPath>
+      <Private>False</Private>
     </Reference>
     <Reference Include="System.Web" />
     <Reference Include="System.Windows.Forms" />
@@ -300,16 +297,16 @@
     <Reference Include="System.Xaml">
       <RequiredTargetFramework>4.0</RequiredTargetFramework>
     </Reference>
-    <Reference Include="Windows">
-      <HintPath>C:\Program Files (x86)\Windows Kits\10\UnionMetadata\Facade\Windows.WinMD</HintPath>
+    <Reference Include="Windows.Foundation">
+      <HintPath>$(SystemRoot)\System32\WinMetadata\Windows.Foundation.winmd</HintPath>
       <Private>False</Private>
     </Reference>
-    <Reference Include="Windows.Foundation.FoundationContract">
-      <HintPath>C:\Program Files (x86)\Windows Kits\10\References\10.0.17134.0\Windows.Foundation.FoundationContract\3.0.0.0\Windows.Foundation.FoundationContract.winmd</HintPath>
+    <Reference Include="Windows.Storage">
+      <HintPath>$(SystemRoot)\System32\WinMetadata\Windows.Storage.winmd</HintPath>
       <Private>False</Private>
     </Reference>
-    <Reference Include="Windows.Foundation.UniversalApiContract">
-      <HintPath>C:\Program Files (x86)\Windows Kits\10\References\10.0.17134.0\Windows.Foundation.UniversalApiContract\6.0.0.0\Windows.Foundation.UniversalApiContract.winmd</HintPath>
+    <Reference Include="Windows.ApplicationModel">
+      <HintPath>$(SystemRoot)\System32\WinMetadata\Windows.ApplicationModel.winmd</HintPath>
       <Private>False</Private>
     </Reference>
     <Reference Include="WindowsBase" />
@@ -331,6 +328,10 @@
     <Compile Include="MOTDBridge.cs" />
     <Compile Include="RemoteControl\ApiServer.cs" />
     <Compile Include="BivrostBootstrapper.cs" />
+    <Compile Include="ConfigUI\AudioDeviceConfigItemView.xaml.cs">
+      <DependentUpon>AudioDeviceConfigItemView.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="ConfigUI\AudioDeviceConfigItemViewModel.cs" />
     <Compile Include="ConfigUI\BoolConfigItemView.xaml.cs">
       <DependentUpon>BoolConfigItemView.xaml</DependentUpon>
     </Compile>
@@ -381,6 +382,7 @@
     <Compile Include="Logic\Logic.cs" />
     <Compile Include="Logic\Protocol.cs" />
     <Compile Include="Logic\ProtocolHandler.cs" />
+    <Compile Include="Logic\Favorites.cs" />
     <Compile Include="Logic\Recents.cs" />
     <Compile Include="Logic\Settings.cs" />
     <Compile Include="BrowserPlugins\Settings_BrowserPluginManagement.cs" />
@@ -401,16 +403,20 @@
     <Compile Include="ServiceResultResolver.xaml.cs">
       <DependentUpon>ServiceResultResolver.xaml</DependentUpon>
     </Compile>
+    <Compile Include="VR\Oculus\OculusControllerInput.cs" />
     <Compile Include="VR\Oculus\OculusPlayback.cs" />
+    <Compile Include="VR\VRFileBrowser.cs" />
     <Compile Include="VR\OpenVR\OpenVRExtensions.cs" />
     <Compile Include="VR\OpenVR\OpenVRPlayback.cs" />
     <Compile Include="VR\OpenVR\openvr_api.cs" />
     <Compile Include="Streaming\LittlstarParser.cs" />
     <Compile Include="Streaming\LocalFileParser.cs" />
+    <Compile Include="Streaming\VR180MeshParser.cs" />
     <Compile Include="Streaming\BivrostProtocolParser.cs" />
     <Compile Include="Streaming\URLParser.cs" />
     <Compile Include="Streaming\YoutubeParser.cs" />
     <Compile Include="Tools\ActionQueue.cs" />
+    <Compile Include="Tools\AudioDeviceManager.cs" />
     <Compile Include="VR\Headset.cs" />
     <Compile Include="VR\VRUI.cs" />
     <Compile Include="VR\Oculus\OculusUIDebug.cs" />
@@ -461,6 +467,10 @@
     <Compile Include="OpenUrlViewModel.cs" />
     <Compile Include="WPF\TopoBuilder.cs" />
     <Page Include="AboutView.xaml">
+      <SubType>Designer</SubType>
+      <Generator>MSBuild:Compile</Generator>
+    </Page>
+    <Page Include="ConfigUI\AudioDeviceConfigItemView.xaml">
       <SubType>Designer</SubType>
       <Generator>MSBuild:Compile</Generator>
     </Page>
@@ -944,7 +954,7 @@
   </Target>
 	-->
   <PropertyGroup>
-    <PostBuildEvent>xcopy $(TargetDir)* D:\Public\BivrostPlayer-$(ConfigurationName)-latest\ /e /y
-</PostBuildEvent>
+    <PostBuildEvent>
+    </PostBuildEvent>
   </PropertyGroup>
 </Project>

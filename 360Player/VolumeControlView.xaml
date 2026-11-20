@@ -28,7 +28,6 @@
                     <RectangleGeometry RadiusX="3" RadiusY="3" Rect="0,32,15,6"/>
                     <RectangleGeometry RadiusX="3" RadiusY="3" Rect="0,40,15,6"/>
                     <RectangleGeometry RadiusX="3" RadiusY="3" Rect="0,48,15,6"/>
-                    <RectangleGeometry RadiusX="3" RadiusY="3" Rect="0,56,15,6"/>
                 </GeometryGroup>
             </Rectangle.Clip>
         </Rectangle>

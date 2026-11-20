@@ -10,11 +10,12 @@ namespace Bivrost.Bivrost360Player.Tools
 
 	class NativeMethods
 	{
+		[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
 		public struct COPYDATASTRUCT
 		{
 			public IntPtr dwData;
 			public int cbData;
-			[MarshalAs(UnmanagedType.LPStr)]
+			[MarshalAs(UnmanagedType.LPWStr)]
 			public string lpData;
 		}
 

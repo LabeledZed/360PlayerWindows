@@ -1,36 +1,45 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+using System.Diagnostics;
 
 namespace Bivrost.Bivrost360Player.Tools
 {
     public class TimeoutBool
     {
-        private DateTime _setTime;
+        private readonly object _sync = new object();
+        private readonly Stopwatch _stopwatch = new Stopwatch();
         private bool _value = false;
+
         public bool Value
         {
-            get {
-                if(_value == true)
+            get
+            {
+                lock (_sync)
                 {
-                    if ((DateTime.Now - _setTime).TotalMilliseconds > Timeout)
-                        Value = false;
+                    if (_value && _stopwatch.Elapsed.TotalMilliseconds > Timeout)
+                    {
+                        _value = false;
+                        _stopwatch.Reset();
+                    }
+                    return _value;
                 }
-                Console.WriteLine("TIMEOUT BOOL GET: " + _value);
-                return _value;
             }
-            set {
-                this._value = value;
-                _setTime = DateTime.Now;
-                Console.WriteLine("TIMEOUT BOOL SET: " + _value + " TIMEOUT: " + Timeout);
+            set
+            {
+                lock (_sync)
+                {
+                    _value = value;
+                    if (value)
+                        _stopwatch.Restart();
+                    else
+                        _stopwatch.Reset();
+                }
             }
         }
 
-        public double Timeout { get; set; }
+        public double Timeout { get; set; } = 6000;
 
         public TimeoutBool() { }
+
         public TimeoutBool(bool initialValue)
         {
             Timeout = 6000;
@@ -39,15 +48,15 @@ namespace Bivrost.Bivrost360Player.Tools
 
         public TimeoutBool(bool initialValue, double timeout)
         {
-            Value = initialValue;
             Timeout = timeout;
+            Value = initialValue;
         }
 
-        public static implicit operator bool (TimeoutBool tb)
+        public static implicit operator bool(TimeoutBool tb)
         {
-            return tb.Value;
+            return tb != null && tb.Value;
         }
-        
+
         public static implicit operator TimeoutBool(bool b)
         {
             return new TimeoutBool(b);

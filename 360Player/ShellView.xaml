@@ -7,7 +7,7 @@
 		xmlns:svgc="http://sharpvectors.codeplex.com/svgc/"
 		xmlns:sys="clr-namespace:System;assembly=mscorlib"		
         Title="{Binding PlayerTitle}" Height="600" Width="1066" MinWidth="820"  MinHeight="530" WindowStartupLocation="CenterScreen" Icon="Graphics\sygnet.ico"
-		cal:Message.Attach="[Shortcut Control+U] = [Action OpenUrl]; [Event Deactivated] = [Action OnLostFocus]; [Event Activated] = [Action OnGotFocus]; [Shortcut F1] = [Action OpenHomePage];
+		cal:Message.Attach="[Shortcut Control+O] = [Action OpenFile]; [Shortcut Control+U] = [Action OpenUrl]; [Shortcut Control+Q] = [Action Quit]; [Shortcut Control+OemComma] = [Action OpenSettings]; [Shortcut F11] = [Action ToggleFullscreen('true')]; [Shortcut Escape] = [Action EscapeFullscreen]; [Event Deactivated] = [Action OnLostFocus]; [Event Activated] = [Action OnGotFocus]; [Shortcut F1] = [Action OpenHomePage];
 		[Shortcut Tab] = [Action DisableTabPress($source, $eventArgs)];" Background="Black">
 
     <Window.Resources>
@@ -187,10 +187,19 @@
                     <MenuItem IsCheckable="True" IsChecked="{Binding UserHeadsetTracking}" Header="User headset tracking in window" InputGestureText="Ctrl+T" />
                     <Separator />
 					<MenuItem IsCheckable="True" IsChecked="{Binding ProjectionIsAuto}" Header="Automatic projection" />
-					<MenuItem IsCheckable="True" IsChecked="{Binding ProjectionIsEquirectangular}" Header="Equirectangular" />
+					<MenuItem IsCheckable="True" IsChecked="{Binding ProjectionIsEquirectangular}" Header="Equirectangular 360" />
+					<MenuItem IsCheckable="True" IsChecked="{Binding ProjectionIsDome}" Header="Equirectangular 180 (Dome / _LR)" />
+					<MenuItem IsCheckable="True" IsChecked="{Binding ProjectionIsFisheye180}" Header="Fisheye / Dual-Fisheye 180 (SBS)" />
+					<MenuItem IsCheckable="True" IsChecked="{Binding ProjectionIsMesh180}" Header="Mesh-Projected 180 (VR180 SBS)" />
 					<!-- TODO: cubemap types -->
-					<MenuItem IsCheckable="True" IsChecked="{Binding ProjectionIsCubeFacebook}" Header="Cubemap (Facebook)" />
-					<MenuItem IsCheckable="True" IsChecked="{Binding ProjectionIsDome}" Header="Equirectangular 180 (Dome)" />
+					<MenuItem IsCheckable="True" IsChecked="{Binding ProjectionIsCubeFacebook}" Header="Cubemap 360 (Facebook)" />
+					<Separator />
+					<MenuItem IsCheckable="True" IsChecked="{Binding StereoIsAuto}" Header="Automatic stereoscopy" />
+					<MenuItem IsCheckable="True" IsChecked="{Binding StereoIsMono}" Header="Mono (2D)" />
+					<MenuItem IsCheckable="True" IsChecked="{Binding StereoIsSideBySide}" Header="Side-by-Side (Left/Right, _LR / SBS)" />
+					<MenuItem IsCheckable="True" IsChecked="{Binding StereoIsSideBySideReversed}" Header="Side-by-Side Reversed (Right/Left, _RL)" />
+					<MenuItem IsCheckable="True" IsChecked="{Binding StereoIsTopBottom}" Header="Top-Bottom (Over/Under, _TB / OU)" />
+					<MenuItem IsCheckable="True" IsChecked="{Binding StereoIsTopBottomReversed}" Header="Top-Bottom Reversed (Under/Over, _BT)" />
 				</MenuItem>
 				<videoanalitics:AnaliticsMenu 
 					DataContext="{Binding AnaliticsMenu}"
@@ -220,17 +229,12 @@
         </DockPanel>
 
 
-        <ui:DPFCanvas x:Name="Canvas1" Stretch="UniformToFill" Grid.Row="1" Grid.RowSpan="3" HorizontalAlignment="Center" VerticalAlignment="Center"
+        <ui:DPFCanvas x:Name="Canvas1" Stretch="UniformToFill" Grid.Row="1" Grid.RowSpan="2" HorizontalAlignment="Center" VerticalAlignment="Center"
 					  cal:Message.Attach="
-                      [Shortcut Control+O] = [Action OpenFile]; 
-                      [Shortcut Control+Q] = [Action Quit]; 
                       [Shortcut Control+S] = [Action Stop]; 
                       [Shortcut Control+R] = [Action Rewind];  
-                      [Shortcut Control+OemComma] = [Action OpenSettings];
                       [Shortcut Control+T] = [Action ToggleUserHeadsetTracking];
                       [Shortcut Space] = [Action PlayPause]; 
-					  [Shortcut F11] = [Action ToggleFullscreen('true')]; 
-                      [Shortcut Escape] = [Action EscapeFullscreen]; 
                       [Event MouseWheel] = [Action ChangeFov($eventArgs)]; 
                       [Shortcut Control+NumPad0] = [Action ResetFov];
 					  [Shortcut Control+D0] = [Action ResetFov]" />
@@ -334,7 +338,7 @@
             <Label HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="White" FontSize="32" IsHitTestVisible="False" FontFamily="Segoe UI Light">Drop video files here</Label>
         </Grid>
 
-        <ContentControl x:Name="NotificationCenter" VerticalAlignment="Bottom" Margin="15" HorizontalAlignment="Right" Background="Pink" Grid.Row="1">
+        <ContentControl x:Name="NotificationCenter" VerticalAlignment="Bottom" Margin="15" HorizontalAlignment="Right" Background="Transparent" Grid.Row="1">
         </ContentControl>
 
 
@@ -638,7 +642,7 @@
                     </Button.Template>
                 </Button>
 
-                <ToggleButton x:Name="VolumeButton"  Width="36" Height="36" Margin="4 0" cal:Message.Attach="[Event MouseEnter] = [Action ShowVolumeControl];
+                <ToggleButton x:Name="VolumeButton"  Width="36" Height="36" Margin="4 0" IsChecked="{Binding VolumeRocker.IsMuted, Mode=OneWay}" cal:Message.Attach="[Event MouseEnter] = [Action ShowVolumeControl];
 							  [Event Click] = [Action Mute]; [Event MouseWheel] = [Action VolumeMouseWheel($eventArgs)]" Focusable="False">
                     <ToggleButton.Template>
                         <ControlTemplate TargetType="{x:Type ToggleButton}">

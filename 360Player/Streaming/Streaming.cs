@@ -128,7 +128,22 @@ namespace Bivrost.Bivrost360Player.Streaming
 		{
 			get
 			{
-				return _title ?? ((videoStreams.Count > 0) ? Path.GetFileName(videoStreams[0].url) : null);
+				if (_title != null) return _title;
+				if (videoStreams != null && videoStreams.Count > 0 && !string.IsNullOrEmpty(videoStreams[0].url))
+				{
+					string path = videoStreams[0].url;
+					if (Uri.TryCreate(path, UriKind.Absolute, out Uri parsed) && !parsed.IsFile)
+						path = parsed.AbsolutePath;
+					try
+					{
+						return Path.GetFileName(path);
+					}
+					catch (ArgumentException)
+					{
+						return null;
+					}
+				}
+				return null;
 			}
 			set
 			{
@@ -161,12 +176,17 @@ namespace Bivrost.Bivrost360Player.Streaming
 		/// <summary>
 		/// Stereoscopy mode (mono, side by side etc)
 		/// </summary>
-		public VideoMode stereoscopy = VideoMode.Mono;
+		public VideoMode stereoscopy = VideoMode.SideBySide;
 
 		/// <summary>
 		/// Projection mode (equirectangular, cubemap types, dome etc)
 		/// </summary>
-		public ProjectionMode projection = ProjectionMode.Sphere;
+		public ProjectionMode projection = ProjectionMode.Dome;
+
+		/// <summary>
+		/// Optional embedded VR180 projection mesh parsed from an MP4 mshp box.
+		/// </summary>
+		public VR180MeshData CustomMesh;
 
         public readonly string mediaId;
 
@@ -208,9 +228,18 @@ namespace Bivrost.Bivrost360Player.Streaming
             return best;
 		}
 
-		public string BestSupportedStream => BestQualityVideoStream(
-				Container.mp4 | Container.hls | Container.avi | Container.wmv | Container.png | Container.jpeg
-		).url;
+		public string BestSupportedStream
+		{
+			get
+			{
+				const Container supported = Container.mp4 | Container.hls | Container.avi | Container.wmv | Container.png | Container.jpeg;
+				return videoStreams?
+					.Where(vs => vs.hasAudio)
+					.Where(vs => (vs.container & supported) != 0)
+					.OrderByDescending(vs => vs.quality)
+					.FirstOrDefault()?.url;
+			}
+		}
 
 		public override string ToString()
 		{
@@ -225,14 +254,8 @@ namespace Bivrost.Bivrost360Player.Streaming
 
 		protected StreamingFactory() { }
 
-		private static StreamingFactory instance;
-		public static StreamingFactory Instance { 
-			get {
-					if (instance == null)
-						instance = new StreamingFactory();
-					return instance;
-			} 
-		}
+		private static readonly Lazy<StreamingFactory> lazyInstance = new Lazy<StreamingFactory>(() => new StreamingFactory());
+		public static StreamingFactory Instance => lazyInstance.Value;
 
 		protected ServiceParser[] parsers = new ServiceParser[] {
 			new BivrostProtocolParser(),
@@ -269,44 +292,65 @@ namespace Bivrost.Bivrost360Player.Streaming
 
 #region util
 
-		static HttpClient client;
+		private static readonly HttpClient client = new HttpClient() { MaxResponseContentBufferSize = 1000000 };
 		public static async Task<string> HTTPGetStringAsync(string uri) {
 			try {
-				if (client == null)
-					client = new HttpClient() { MaxResponseContentBufferSize = 1000000 };
-				var response = await client.GetAsync(uri);
-				if (!response.IsSuccessStatusCode)
-					throw new StreamNetworkFailure("Status " + response.StatusCode, uri);
-				return await response.Content.ReadAsStringAsync(); ;
+				using (var response = await client.GetAsync(uri).ConfigureAwait(false))
+				{
+					if (!response.IsSuccessStatusCode)
+						throw new StreamNetworkFailure("Status " + response.StatusCode, uri);
+					return await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+				}
 			}
 			catch (HttpRequestException e) {
-				throw new StreamNetworkFailure("HttpRequestException " + e.Message, uri);
+				throw new StreamNetworkFailure("HttpRequestException " + e.Message, uri, e);
 			}
 		}
 
 		public static string HTTPGetString(string uri, bool defaultHttp=true)
 		{
+			if (string.IsNullOrWhiteSpace(uri))
+				throw new StreamNetworkFailure("Empty URI", uri);
 			if (!uri.StartsWith("http://", StringComparison.InvariantCultureIgnoreCase) && !uri.StartsWith("https://", StringComparison.InvariantCultureIgnoreCase))
 				uri = (defaultHttp ? "http://" : "https://") + uri;
-			RestClient client = new RestClient(uri);
+			RestClient restClient = new RestClient(uri);
 			IRestRequest request = new RestRequest(Method.GET);
 			request.AddHeader("Accept", "text/html");
-			IRestResponse response = client.Execute(request);
+			IRestResponse response = restClient.Execute(request);
 
 			log.Info("HTTP request: " + uri);
 
-			if ((int)response.StatusCode < 200 || (int)response.StatusCode >= 400)
-				throw new StreamNetworkFailure("Status "+response.StatusCode, uri);
-
 			if (response.ErrorException != null)
-				throw new StreamNetworkFailure(response.ErrorMessage, uri, response.ErrorException); 
+				throw new StreamNetworkFailure(response.ErrorMessage, uri, response.ErrorException);
+
+			int statusCode = (int)response.StatusCode;
+			if (statusCode < 200 || statusCode >= 300)
+				throw new StreamNetworkFailure("Status " + response.StatusCode, uri);
+
 			return response.Content;
 		}
 
+		protected static string ExtractInspectionPath(string path)
+		{
+			if (string.IsNullOrWhiteSpace(path))
+				return string.Empty;
+			if (Uri.TryCreate(path, UriKind.Absolute, out Uri parsed) && !parsed.IsFile)
+				return parsed.AbsolutePath;
+			return path;
+		}
 
 		protected Container GuessContainerFromExtension(string path)
 		{
-			string extension = System.IO.Path.GetExtension(path).ToLowerInvariant();
+			string inspectionPath = ExtractInspectionPath(path);
+			string extension;
+			try
+			{
+				extension = System.IO.Path.GetExtension(inspectionPath).ToLowerInvariant();
+			}
+			catch (ArgumentException)
+			{
+				extension = string.Empty;
+			}
 			switch(extension)
 			{
 
@@ -333,6 +377,7 @@ namespace Bivrost.Bivrost360Player.Streaming
 				case ".wmv":
 					return Container.wmv;
 
+				case ".mov":
 				case ".m4v":
 				case ".mp4":
 					return Container.mp4;
@@ -347,7 +392,7 @@ namespace Bivrost.Bivrost360Player.Streaming
 
 				case "":
 				default:
-					log.Info($"GuessContainerFromExtension(${path}) - did not understand extension \"${extension}\", guessing mp4");
+					log.Info($"GuessContainerFromExtension({path}) - did not understand extension \"{extension}\", guessing mp4");
 					goto case ".mp4";
 			}
 		}
@@ -379,24 +424,77 @@ namespace Bivrost.Bivrost360Player.Streaming
 
 		protected VideoMode GuessStereoscopyFromFileName(string path)
 		{
-			string fileName = Path.GetFileNameWithoutExtension(path);
+			return GuessStereoscopyModeFromFileName(path);
+		}
 
-			if (Regex.IsMatch(fileName, @"(\b|_)(SbS|LR)(\b|_)"))
+		protected ProjectionMode GuessProjectionFromFileName(string path)
+		{
+			return GuessProjectionModeFromFileName(path);
+		}
+
+		public static VideoMode GuessStereoscopyModeFromFileName(string path)
+		{
+			string inspectionPath = ExtractInspectionPath(path);
+			string fileName;
+			try
+			{
+				fileName = Path.GetFileNameWithoutExtension(inspectionPath) ?? string.Empty;
+			}
+			catch (ArgumentException)
+			{
+				return VideoMode.Autodetect;
+			}
+
+			if (Regex.IsMatch(fileName, @"(?<![a-zA-Z])(sbs|hsbs|fsbs|lr|3dh|leftright|left[-_]right|dual[-_]?fisheye|mkx200|mkx190)(?![a-zA-Z0-9])", RegexOptions.IgnoreCase))
 				return VideoMode.SideBySide;
 
-			if (Regex.IsMatch(fileName, @"(\b|_)(RL)(\b|_)"))
+			if (Regex.IsMatch(fileName, @"(?<![a-zA-Z])(rl|sbsr|rightleft|right[-_]left)(?![a-zA-Z0-9])", RegexOptions.IgnoreCase))
 				return VideoMode.SideBySideReversed;
 
-			if (Regex.IsMatch(fileName, @"(\b|_)(TaB|TB)(\b|_)"))
+			if (Regex.IsMatch(fileName, @"(?<![a-zA-Z])(tab|htab|ftab|tb|3dv|ou|hou|fou|overunder|over[-_]under|topbottom|top[-_]bottom)(?![a-zA-Z0-9])", RegexOptions.IgnoreCase))
 				return VideoMode.TopBottom;
 
-			if (Regex.IsMatch(fileName, @"(\b|_)(BaT|BT)(\b|_)"))
+			if (Regex.IsMatch(fileName, @"(?<![a-zA-Z])(bat|bt|uo|underover|under[-_]over|bottomtop|bottom[-_]top)(?![a-zA-Z0-9])", RegexOptions.IgnoreCase))
 				return VideoMode.TopBottomReversed;
 
-			if (Regex.IsMatch(fileName, @"(\b|_)mono(\b|_)"))
+			if (Regex.IsMatch(fileName, @"(?<![a-zA-Z0-9])(mono|2d)(?![a-zA-Z0-9])", RegexOptions.IgnoreCase))
 				return VideoMode.Mono;
 
 			return VideoMode.Autodetect;
+		}
+
+		public static ProjectionMode GuessProjectionModeFromFileName(string path)
+		{
+			string inspectionPath = ExtractInspectionPath(path);
+			string fileName;
+			try
+			{
+				fileName = Path.GetFileNameWithoutExtension(inspectionPath) ?? string.Empty;
+			}
+			catch (ArgumentException)
+			{
+				return ProjectionMode.Autodetect;
+			}
+
+			if (Regex.IsMatch(fileName, @"(?<![a-zA-Z])(fisheye|dual[-_]?fisheye|mkx200|mkx190|f180|180f|190x190|200x200)(?![a-zA-Z0-9])", RegexOptions.IgnoreCase))
+				return ProjectionMode.Fisheye180;
+
+			if (Regex.IsMatch(fileName, @"(?<![a-zA-Z])(mesh|mesh180|180mesh|mshp|eac180|180eac)(?![a-zA-Z0-9])", RegexOptions.IgnoreCase))
+				return ProjectionMode.Mesh180;
+
+			if (Regex.IsMatch(fileName, @"(?<![a-zA-Z])(cubemap|facebook360|fb360|cube360)(?![a-zA-Z0-9])", RegexOptions.IgnoreCase))
+				return ProjectionMode.CubeFacebook;
+
+			// Explicit 360 tag (e.g. 360_SBS, 360_LR, 360_TB, 360x180)
+			if (Regex.IsMatch(fileName, @"(?<![a-zA-Z0-9])(360|360x180)(?![0-9])", RegexOptions.IgnoreCase))
+				return ProjectionMode.Sphere;
+
+			// Explicit 180 tag (e.g. 180_LR, 180_SBS, 180_TB, VR180, 180x180, dome) or _LR / _RL / _3DH suffix without 360
+			if (Regex.IsMatch(fileName, @"(?<![a-zA-Z0-9])(180|vr180|180x180|dome|hemisphere)(?![0-9]|p\b)", RegexOptions.IgnoreCase) ||
+				Regex.IsMatch(fileName, @"(?<![a-zA-Z])(lr|rl|3dh)(?![a-zA-Z0-9])", RegexOptions.IgnoreCase))
+				return ProjectionMode.Dome;
+
+			return ProjectionMode.Autodetect;
 		}
 
         protected static string URIToMediaId(string URI)

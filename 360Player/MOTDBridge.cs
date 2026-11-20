@@ -28,14 +28,14 @@ namespace Bivrost.Bivrost360Player
 						if (PublishInfo.ApplicationIdentity != null && ApplicationDeployment.IsNetworkDeployed)
 							return _version = PublishInfo.ApplicationIdentity?.Version.ToString();
 					}
-					catch (Exception exc) { }
+					catch (Exception) { }
 
 					try
 					{
                         // Try to extract version from UWP package
 						var version = Package.Current.Id.Version;
-						return _version = string.Format("{0}.{1}.{2}.{3}", version.Major, version.Minor, 0, version.Build);
-					} catch(Exception exc) { }
+						return _version = string.Format("{0}.{1}.{2}.{3}", version.Major, version.Minor, version.Build, version.Revision);
+					} catch(Exception) { }
 
                     // If everything else fails, use the assembly version
 					var assembly = typeof(App).GetTypeInfo().Assembly;

@@ -30,6 +30,12 @@ namespace Bivrost.Bivrost360Player
 
 		public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
 		{
+			if (value == DependencyProperty.UnsetValue || value == Binding.DoNothing)
+				return value;
+			if (value == null && default(Tinput) != null)
+				return DependencyProperty.UnsetValue;
+			if (value != null && !(value is Tinput))
+				return DependencyProperty.UnsetValue;
 			return Convert((Tinput)value, parameter, culture);
 		}
 

@@ -18,8 +18,11 @@ namespace Bivrost.Bivrost360Player.Streaming
 
         public override bool CanParse(string url)
 		{
-			var uri = new Uri(url);
-			return uri.Scheme == "bivrost";
+			if (string.IsNullOrWhiteSpace(url))
+				return false;
+			if (!Uri.TryCreate(url, UriKind.Absolute, out Uri uri))
+				return false;
+			return uri.Scheme.Equals("bivrost", StringComparison.OrdinalIgnoreCase);
 		}
 
 		public override ServiceResult Parse(string uri)
@@ -32,17 +35,19 @@ namespace Bivrost.Bivrost360Player.Streaming
 				case Protocol.Stereoscopy.autodetect: stereoscopy = VideoMode.Autodetect; break;
 				case Protocol.Stereoscopy.mono: stereoscopy = VideoMode.Mono; break;
 				case Protocol.Stereoscopy.side_by_side: stereoscopy = VideoMode.SideBySide; break;
+				case Protocol.Stereoscopy.side_by_side_reversed: stereoscopy = VideoMode.SideBySideReversed; break;
 				case Protocol.Stereoscopy.top_and_bottom: stereoscopy = VideoMode.TopBottom; break;
 				case Protocol.Stereoscopy.top_and_bottom_reversed: stereoscopy = VideoMode.TopBottomReversed; break;
 			}
 			bool Loop = protocol.loop.HasValue ? protocol.loop.Value : false;       // unused
 			string videoUrl = protocol.urls.FirstOrDefault((u) =>
 			{
-				var b1 = Regex.IsMatch(u, @"(\b|_).mp4(\b|_)");
-				var b2 = Regex.IsMatch(u, @"(\b|_).avi(\b|_)");
-				return b1 || b2;
+				if (string.IsNullOrWhiteSpace(u)) return false;
+				string p = ExtractInspectionPath(u);
+				return p.EndsWith(".mp4", StringComparison.OrdinalIgnoreCase)
+					|| p.EndsWith(".avi", StringComparison.OrdinalIgnoreCase);
 			});
-			if (string.IsNullOrWhiteSpace(videoUrl))
+			if (string.IsNullOrWhiteSpace(videoUrl) && protocol.urls.Count > 0)
 				videoUrl = protocol.urls[0];
 
 			if (string.IsNullOrWhiteSpace(videoUrl))
@@ -55,7 +60,15 @@ namespace Bivrost.Bivrost360Player.Streaming
 				case Protocol.Projection.equirectangular: projection = ProjectionMode.Sphere; break;
 			}
 
-			string title = System.IO.Path.GetFileName(videoUrl);
+			string title;
+			try
+			{
+				title = System.IO.Path.GetFileName(ExtractInspectionPath(videoUrl));
+			}
+			catch (ArgumentException)
+			{
+				title = null;
+			}
 			if (string.IsNullOrWhiteSpace(title))
 				title = uri;
 

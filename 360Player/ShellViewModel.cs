@@ -101,12 +101,16 @@ namespace Bivrost.Bivrost360Player
 		public DPFCanvas DXCanvas;
 		public ShellView shellView;
 
-		private bool ended = false;
+		private volatile bool ended = false;
 		private bool lockSlider = false;
+		private bool _closed = false;
+		private HwndSource _hwndSource;
+		private Scene _currentScene;
 
 		private bool autoplay = false;
+		private bool _lastMediaLoadedFromVR = false;
 		private MediaDecoder _mediaDecoder;
-		private bool _ready = false;
+		private volatile bool _ready = false;
 
 		Window playerWindow;
 		private AutoResetEvent waitForPlaybackReady = new AutoResetEvent(false);
@@ -165,7 +169,7 @@ namespace Bivrost.Bivrost360Player
 			_mediaDecoder.OnReady += (duration) =>
 			{
 				_ready = true;
-				SendEvent("movieLoaded", Path.GetFileName(SelectedFileName));
+				SendEvent("movieLoaded", SafeGetFileName(SelectedFileName));
 				if (autoplay)
 				{
 					autoplay = false;
@@ -176,7 +180,7 @@ namespace Bivrost.Bivrost360Player
 
 			_mediaDecoder.OnEnded += () =>
 			{
-				SendEvent("movieEnded", Path.GetFileName(SelectedFileName));
+				SendEvent("movieEnded", SafeGetFileName(SelectedFileName));
 				Task.Factory.StartNew(() => Execute.OnUIThread(() =>
 				{
 					Stop();
@@ -187,7 +191,7 @@ namespace Bivrost.Bivrost360Player
 			_mediaDecoder.OnStop += () =>
 			{
 				Task.Factory.StartNew(() => waitForPlaybackStop.Set());
-				SendEvent("movieStopped", Path.GetFileName(SelectedFileName));
+				SendEvent("movieStopped", SafeGetFileName(SelectedFileName));
 			};
 
 			_mediaDecoder.OnTimeUpdate += (time) =>
@@ -195,17 +199,26 @@ namespace Bivrost.Bivrost360Player
 
 				if (!_mediaDecoder.IsPlaying) return;
 
+				if (!lockSlider)
+				{
+					VRUIUpdatePlaybackTime(time);
+				}
+
 				Execute.OnUIThreadAsync(() =>
 				{
 					if (!lockSlider)
 					{
-						VRUIUpdatePlaybackTime(time);
-						CurrentPosition = (new TimeSpan(0, 0, (int)Math.Floor(time))).ToString();
-						_timeValue = time;
+						CurrentPosition = SafeFormatTime(time);
+						_timeValue = double.IsNaN(time) || double.IsInfinity(time) ? 0 : time;
 						NotifyOfPropertyChange(() => TimeValue);
 					}
 					UpdateTimeLabel();
 				});
+			};
+
+			_mediaDecoder.OnSeek += (time) =>
+			{
+				CurrentHeadset?.NotifySeek((float)time);
 			};
 
 			_mediaDecoder.OnError += (error) =>
@@ -224,7 +237,8 @@ namespace Bivrost.Bivrost360Player
 			{
 				Execute.OnUIThreadAsync(() =>
 				{
-					shellView.BufferingStatus.Visibility = Visibility.Visible;
+					if (shellView != null)
+						shellView.BufferingStatus.Visibility = Visibility.Visible;
 				});
 			};
 
@@ -232,7 +246,8 @@ namespace Bivrost.Bivrost360Player
 			{
 				Execute.OnUIThreadAsync(() =>
 				{
-					shellView.BufferingStatus.Visibility = Visibility.Collapsed;
+					if (shellView != null)
+						shellView.BufferingStatus.Visibility = Visibility.Collapsed;
 				});
 			};
 
@@ -240,7 +255,8 @@ namespace Bivrost.Bivrost360Player
 			{
 				Execute.OnUIThreadAsync(() =>
 				{
-					shellView.BufferingStatus.Text = $"Buffering... {progress}";
+					if (shellView != null)
+						shellView.BufferingStatus.Text = $"Buffering... {progress}";
 				});
 			};
 
@@ -252,6 +268,7 @@ namespace Bivrost.Bivrost360Player
 			VolumeRocker.OnVolumeChange += (volume) =>
 			{
 				_mediaDecoder.SetVolume(volume);
+				CurrentHeadset?.NotifyVolumeChanged((float)volume, VolumeRocker.IsMuted);
 				ShellViewModel.SendEvent("volumeChanged", volume);
 			};
 
@@ -283,6 +300,37 @@ namespace Bivrost.Bivrost360Player
 		}
 
 
+		private static string SafeGetFileName(string pathOrUri)
+		{
+			if (string.IsNullOrWhiteSpace(pathOrUri))
+				return string.Empty;
+
+			try
+			{
+				if (Uri.TryCreate(pathOrUri, UriKind.Absolute, out Uri uri) && !uri.IsFile)
+				{
+					return Path.GetFileName(uri.AbsolutePath) ?? string.Empty;
+				}
+				return Path.GetFileName(pathOrUri) ?? string.Empty;
+			}
+			catch (ArgumentException)
+			{
+				return string.Empty;
+			}
+		}
+
+		private static string SafeFormatTime(double seconds)
+		{
+			if (double.IsNaN(seconds) || double.IsInfinity(seconds) || seconds < 0)
+				return "00:00:00";
+
+			double floored = Math.Floor(seconds);
+			if (floored >= TimeSpan.MaxValue.TotalSeconds)
+				floored = TimeSpan.MaxValue.TotalSeconds - 1;
+
+			return TimeSpan.FromSeconds(floored).ToString();
+		}
+
 		private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
 		{
 
@@ -291,7 +339,7 @@ namespace Bivrost.Bivrost360Player
 				BringToFront();
 				handled = true;
 			}
-			if (msg == NativeMethods.WM_COPYDATA)
+			if (msg == NativeMethods.WM_COPYDATA && lParam != IntPtr.Zero)
 			{
 				NativeMethods.COPYDATASTRUCT cps = (NativeMethods.COPYDATASTRUCT)System.Runtime.InteropServices.Marshal.PtrToStructure(lParam, typeof(NativeMethods.COPYDATASTRUCT));
 				string data = cps.lpData;
@@ -307,14 +355,13 @@ namespace Bivrost.Bivrost360Player
 
 		public void BringToFront(string wmText = "")
 		{
-			Execute.OnUIThreadAsync(() => playerWindow.Activate());
+			Execute.OnUIThreadAsync(() => playerWindow?.Activate());
 
-			//string clipboardText = Clipboard.GetText();
-			string clipboardText = wmText;
-
-			LoggerManager.Info($"Clipboard: ${clipboardText}");
-
-			OpenURI(clipboardText);
+			if (!string.IsNullOrWhiteSpace(wmText))
+			{
+				LoggerManager.Info($"Received URI from another instance: {wmText}");
+				OpenURI(wmText);
+			}
 		}
 
 		protected override void OnViewLoaded(object view)
@@ -323,8 +370,8 @@ namespace Bivrost.Bivrost360Player
 			base.OnViewLoaded(view);
 
             IntPtr windowHandle = new WindowInteropHelper(playerWindow).Handle;
-            HwndSource source = HwndSource.FromHwnd(windowHandle);
-			source.AddHook(new HwndSourceHook(WndProc));
+            _hwndSource = HwndSource.FromHwnd(windowHandle);
+			_hwndSource?.AddHook(new HwndSourceHook(WndProc));
 
 			this.DXCanvas.StopRendering();
 
@@ -371,6 +418,11 @@ namespace Bivrost.Bivrost360Player
 
 			InputDevices.NavigatorInputDevice.TryInit(windowHandle);
 
+			if (SettingHeadsetUsage != HeadsetMode.Disable)
+			{
+				Task.Factory.StartNew(() => ResetVR());
+			}
+
 			var motdBridge = new MOTDBridge();
 			motd = new MOTDClient("https://download.bivrost360.com/player-desktop/?action=", motdBridge);
 
@@ -396,6 +448,10 @@ namespace Bivrost.Bivrost360Player
 		{
 			if (!Features.Commercial)
 				Logic.Notify("Please remember that 360Player requires a license for commercial use.");
+#if FEATURE_REMOTE_CONTROL
+			if (Logic.Instance.settings.EnableRemoteControl && Features.RemoteEnabled)
+				EnableRemoteControl();
+#endif
 			NotifyOfPropertyChange(null);
 		}
 
@@ -411,10 +467,11 @@ namespace Bivrost.Bivrost360Player
 
 
 
-		public void LoadMedia(ServiceResult result, bool autoplay = true)
+		public void LoadMedia(ServiceResult result, bool autoplay = true, bool loadedFromVR = false)
 		{
 
 			SelectedServiceResult = result;
+			_lastMediaLoadedFromVR = loadedFromVR;
 
 			IsFileSelected = true;
 
@@ -430,7 +487,15 @@ namespace Bivrost.Bivrost360Player
 				CurrentHeadset.Media = SelectedServiceResult;
 			}
 
-			Task.Factory.StartNew(() => _mediaDecoder.LoadMedia(result));
+			string configuredAudioDevice = Logic.Instance?.settings?.AudioOutputDevice;
+
+			Task.Factory.StartNew(() =>
+			{
+				string endpointId = AudioDeviceManager.ResolveAudioEndpointId(configuredAudioDevice, loadedFromVR);
+				_mediaDecoder.SetAudioOutputEndpoint(endpointId);
+				_mediaDecoder.LoadMedia(result);
+				Execute.OnUIThreadAsync(() => NotifyProjectionAndStereoChanged());
+			});
 		}
 
 		protected override void OnViewAttached(object view, object context)
@@ -450,12 +515,16 @@ namespace Bivrost.Bivrost360Player
 				{
 					if (File.Exists(Logic.Instance.settings.AutoPlayFile))
 					{
-						//SelectedFileName = Logic.Instance.settings.AutoPlayFile.Trim();
-
-						var result = StreamingFactory.Instance.GetStreamingInfo(Logic.Instance.settings.AutoPlayFile.Trim());
-
-						LoadMedia(result);
-						//Play();
+						try
+						{
+							var result = StreamingFactory.Instance.GetStreamingInfo(Logic.Instance.settings.AutoPlayFile.Trim());
+							if (result != null)
+								LoadMedia(result);
+						}
+						catch (Exception ex)
+						{
+							LoggerManager.Error("Failed to auto-load file: " + ex);
+						}
 					}
 				}
 
@@ -468,7 +537,7 @@ namespace Bivrost.Bivrost360Player
 			uiVisibilityBackgrundChecker.WorkerSupportsCancellation = true;
 			uiVisibilityBackgrundChecker.DoWork += (sender, parameters) =>
 			{
-				while (!ended || uiVisibilityBackgrundChecker.CancellationPending)
+				while (!ended && !uiVisibilityBackgrundChecker.CancellationPending)
 				{
 
 					if ((DateTime.Now - lastUIMove).TotalSeconds > 2)
@@ -561,7 +630,7 @@ namespace Bivrost.Bivrost360Player
 				}
 				else
 				{
-					CurrentPosition = (new TimeSpan(0, 0, (int)Math.Floor(_timeValue))).ToString();
+					CurrentPosition = SafeFormatTime(_timeValue);
 					NotifyOfPropertyChange(() => CurrentPosition);
 				}
 			}
@@ -609,8 +678,8 @@ namespace Bivrost.Bivrost360Player
 			{
 				ShowPlaybackUI();
 				TimeValue = 0;
-				MaxTime = _mediaDecoder.Duration;
-				VideoLength = (new TimeSpan(0, 0, (int)Math.Floor(_mediaDecoder.Duration))).ToString();
+				MaxTime = double.IsNaN(_mediaDecoder.Duration) || double.IsInfinity(_mediaDecoder.Duration) || _mediaDecoder.Duration < 0 ? 0 : _mediaDecoder.Duration;
+				VideoLength = SafeFormatTime(_mediaDecoder.Duration);
 				UpdateTimeLabel();
 				//DisplayName = DisplayString + " - " + SelectedFileNameLabel;
 
@@ -628,7 +697,15 @@ namespace Bivrost.Bivrost360Player
 					this.DXCanvas.Visibility = Visibility.Visible;
 				});
 
+				if (_currentScene != null)
+				{
+					HeadsetEnable -= _currentScene.HeadsetEnabled;
+					HeadsetDisable -= _currentScene.HeadsetDisabled;
+					_currentScene = null;
+				}
+
 				var scene = new Scene(_mediaDecoder.ContentRequested);
+				_currentScene = scene;
 				this.DXCanvas.Scene = scene;
                 this.DXCanvas.StartRendering();
 
@@ -659,25 +736,28 @@ namespace Bivrost.Bivrost360Player
 
 		void ResetPlayback()
 		{
-			if (IsPlaying)
+			if (_currentScene != null)
 			{
-				waitForPlaybackStop.Reset();
-				Stop();
-				waitForPlaybackStop.WaitOne();
-			}
-			else
-			{
-				int it = 5;
-				while (_mediaDecoder.Initialized && it > 0)
-				{
-					Thread.Sleep(100);
-					it--;
-				}
+				HeadsetEnable -= _currentScene.HeadsetEnabled;
+				HeadsetDisable -= _currentScene.HeadsetDisabled;
+				_currentScene = null;
 			}
 
-			//_mediaDecoder.Projection = ProjectionMode.Sphere;
-			//_mediaDecoder.StereoMode = VideoMode.Autodetect;
+			if (this.DXCanvas != null)
+			{
+				this.DXCanvas.Scene = null;
+				this.DXCanvas.StopRendering();
+			}
 
+			if (IsPlaying || _mediaDecoder.IsEnded || _mediaDecoder.Initialized)
+			{
+				_mediaDecoder.Stop(true);
+				ShellViewModel.SendEvent("movieStopped", SafeGetFileName(SelectedFileName));
+			}
+
+			_timeValue = 0;
+			CurrentPosition = "00:00:00";
+			UpdateTimeLabel();
 			SelectedServiceResult = null;
 		}
 
@@ -721,6 +801,49 @@ namespace Bivrost.Bivrost360Player
 			});
 		}
 
+		/// <summary>
+		/// Called from the VR thread (e.g. Oculus controller) to toggle play/pause or open the in-VR file browser if no media is loaded.
+		/// </summary>
+		public void PlayPauseFromVR()
+		{
+			if (!IsFileSelected && !IsPlaying && CurrentHeadset != null)
+			{
+				CurrentHeadset.FileBrowser.Open();
+				return;
+			}
+			Execute.OnUIThreadAsync(() => PlayPause());
+		}
+
+		/// <summary>
+		/// Opens and plays a local file directly from the in-VR file browser without showing a blocking desktop modal dialog.
+		/// </summary>
+		public void OpenLocalFileFromVR(string filePath)
+		{
+			if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath))
+				return;
+
+			Task.Factory.StartNew(() =>
+			{
+				try
+				{
+					var parser = new LocalFileParser();
+					var result = parser.Parse(filePath);
+					if (result == null) return;
+
+					Execute.OnUIThread(() =>
+					{
+						ResetPlayback();
+						LoadMedia(result, true, loadedFromVR: true);
+					});
+				}
+				catch (Exception ex)
+				{
+					LoggerManager.Error("Failed to open local file from VR: " + ex);
+					Logic.Notify("Unable to open the selected file.");
+				}
+			});
+		}
+
 		
         public void PlayPause()
 		{
@@ -754,7 +877,7 @@ namespace Bivrost.Bivrost360Player
 			Task.Factory.StartNew(() =>
 			{
 				_mediaDecoder.Pause();
-				ShellViewModel.SendEvent("moviePaused", Path.GetFileName(SelectedFileName));
+				ShellViewModel.SendEvent("moviePaused", SafeGetFileName(SelectedFileName));
 			});
 			Execute.OnUIThreadAsync(() =>
 			{
@@ -776,7 +899,7 @@ namespace Bivrost.Bivrost360Player
 				Task.Factory.StartNew(() =>
 				{
 					_mediaDecoder.Unpause();
-					ShellViewModel.SendEvent("movieUnpaused", Path.GetFileName(SelectedFileName));
+					ShellViewModel.SendEvent("movieUnpaused", SafeGetFileName(SelectedFileName));
 				});
 				shellView.PlayPause.Visibility = Visibility.Collapsed;
 				shellView.Pause.Visibility = Visibility.Visible;
@@ -829,15 +952,16 @@ namespace Bivrost.Bivrost360Player
 			{
 				// Note that you can have more than one file.
 				string[] files = (string[])e.Data.GetData(DataFormats.FileDrop);
-				string ext = Path.GetExtension(files[0]);
-				//if (Path.GetExtension(files[0]) == ".mp4")
-				if (MediaDecoder.CheckExtension(Path.GetExtension(files[0])))
+				if (files != null && files.Length > 0 && !string.IsNullOrWhiteSpace(files[0]))
 				{
-					OpenURI(files[0]);
-				}
-				else
-				{
-					NotificationCenter.PushNotification(new NotificationViewModel("File format not supported."));
+					if (MediaDecoder.CheckExtension(Path.GetExtension(files[0])))
+					{
+						OpenURI(files[0]);
+					}
+					else
+					{
+						NotificationCenter.PushNotification(new NotificationViewModel("File format not supported."));
+					}
 				}
 			}
 			ShowDropFilesPanel(false);
@@ -881,77 +1005,136 @@ namespace Bivrost.Bivrost360Player
 		public void Stop()
 		{
 			LoggerManager.Info("File ended");
-			if (Fullscreen) if (!Logic.Instance.settings.DoNotExitFullscreenOnStop) ToggleFullscreen(true);
-			//space press hack
-			Execute.OnUIThread(() => shellView.VideoProgressBar.Focus());
-			ShowBars();
-			ShowStartupUI();
-
-			LoggerManager.Info("Media stopped");
-
-			this.DXCanvas.Scene = null;
-
-			HeadsetStop();
-			//headsets.ForEach(h => h.Stop());
-
 			Execute.OnUIThread(() =>
 			{
-				shellView.TopBar.Visibility = Visibility.Hidden;
-				this.DXCanvas.Visibility = Visibility.Hidden;
-			});
+				if (Fullscreen && !Logic.Instance.settings.DoNotExitFullscreenOnStop)
+					ToggleFullscreen(true);
+				//space press hack
+				if (shellView != null)
+					shellView.VideoProgressBar.Focus();
+				ShowBars();
+				ShowStartupUI();
 
-			Task.Factory.StartNew(() =>
-			{
-				if (IsPlaying || _mediaDecoder.IsEnded)
+				LoggerManager.Info("Media stopped");
+
+				if (_currentScene != null)
 				{
-					_mediaDecoder.Stop();
-					ShellViewModel.SendEvent("movieStopped", Path.GetFileName(SelectedFileName));
-					//STATS
-					Logic.Instance.stats.TrackEvent("Application events", "Stop", "");
-
-					_timeValue = 0;
-					try
-					{
-						Execute.OnUIThread(() =>
-						{
-							NotifyOfPropertyChange(() => TimeValue);
-							NotifyOfPropertyChange(() => CanPlay);
-							CurrentPosition = (new TimeSpan(0, 0, 0)).ToString();
-							UpdateTimeLabel();
-
-							shellView.PlayPause.Visibility = Visibility.Visible;
-							shellView.Pause.Visibility = Visibility.Collapsed;
-
-							this.DXCanvas.StopRendering();
-						});
-					}
-					catch (Exception) { }
+					HeadsetEnable -= _currentScene.HeadsetEnabled;
+					HeadsetDisable -= _currentScene.HeadsetDisabled;
+					_currentScene = null;
+				}
+				if (this.DXCanvas != null)
+				{
+					this.DXCanvas.Scene = null;
+					this.DXCanvas.StopRendering();
+					this.DXCanvas.Visibility = Visibility.Hidden;
+				}
+				if (shellView != null)
+				{
+					shellView.TopBar.Visibility = Visibility.Hidden;
 				}
 			});
 
-			waitForPlaybackStop.Set();
+			HeadsetStop();
 
-			//SelectedServiceResult = null;
+			Task.Factory.StartNew(() =>
+			{
+				try
+				{
+					if (IsPlaying || _mediaDecoder.IsEnded)
+					{
+						_mediaDecoder.Stop();
+						ShellViewModel.SendEvent("movieStopped", SafeGetFileName(SelectedFileName));
+						//STATS
+						Logic.Instance.stats.TrackEvent("Application events", "Stop", "");
+
+						_timeValue = 0;
+						try
+						{
+							Execute.OnUIThreadAsync(() =>
+							{
+								NotifyOfPropertyChange(() => TimeValue);
+								NotifyOfPropertyChange(() => CanPlay);
+								CurrentPosition = "00:00:00";
+								UpdateTimeLabel();
+
+								if (shellView != null && !IsPlaying)
+								{
+									shellView.PlayPause.Visibility = Visibility.Visible;
+									shellView.Pause.Visibility = Visibility.Collapsed;
+								}
+							});
+						}
+						catch (Exception) { }
+					}
+				}
+				finally
+				{
+					waitForPlaybackStop.Set();
+				}
+			});
 
 			NotifyOfPropertyChange(() => PlayerTitle);
 			NotifyOfPropertyChange(() => CanStopOrRewind);
 		}
 
-		public override void TryClose(bool? dialogResult = null)
+		public void ForceShutdownOnWindowClose()
 		{
 			ended = true;
-			Stop();
+			_closed = true;
+
+			try { _mediaDecoder?.SetVolume(0); } catch (Exception) { }
+			try { _mediaDecoder?.Pause(); } catch (Exception) { }
+			try { CurrentHeadset?.Abort(); } catch (Exception) { }
+			try { this.DXCanvas?.StopRendering(); } catch (Exception) { }
+			try { _mediaDecoder?.Shutdown(); } catch (Exception) { }
+		}
+
+		public override void TryClose(bool? dialogResult = null)
+		{
+			if (_closed) return;
+			_closed = true;
+			ended = true;
+
+			try { uiVisibilityBackgrundChecker?.CancelAsync(); } catch (Exception) { }
+			Features.ListUpdated -= LicenseUpdated;
+			if (_hwndSource != null)
+			{
+				_hwndSource.RemoveHook(WndProc);
+				_hwndSource = null;
+			}
+
+			try { CurrentHeadset?.Abort(); } catch (Exception) { }
+			CurrentHeadset = null;
+
+			if (_currentScene != null)
+			{
+				HeadsetEnable -= _currentScene.HeadsetEnabled;
+				HeadsetDisable -= _currentScene.HeadsetDisabled;
+				_currentScene = null;
+			}
+
+			if (this.DXCanvas != null)
+			{
+				try
+				{
+					this.DXCanvas.Scene = null;
+					this.DXCanvas.StopRendering();
+				}
+				catch (Exception) { }
+			}
+
 			Task.Factory.StartNew(async () =>
 			{
-				await Logic.Instance.stats.TrackQuit();
+				try { await Logic.Instance.stats.TrackQuit(); } catch (Exception) { }
 			});
-
-			base.TryClose(dialogResult);
 
 			if (_mediaDecoder != null)
 				_mediaDecoder.Shutdown();
-			//nancy.Stop();
 
+			(Logic.Instance as IDisposable)?.Dispose();
+
+			base.TryClose(dialogResult);
 		}
 
 		public void Rewind()
@@ -984,6 +1167,11 @@ namespace Bivrost.Bivrost360Player
 			DialogHelper.ShowDialog<ConfigurationViewModel>();
 			Logic.Instance.ValidateSettings();
 
+			string endpointId = AudioDeviceManager.ResolveAudioEndpointId(
+				Logic.Instance?.settings?.AudioOutputDevice,
+				_lastMediaLoadedFromVR);
+			_mediaDecoder?.SetAudioOutputEndpoint(endpointId);
+
 			// update all settings after exiting settings dialog
 			NotifyOfPropertyChange(null);	
 		}
@@ -1003,16 +1191,23 @@ namespace Bivrost.Bivrost360Player
 		{
 			if (_doubleClickDetected) return;
 			var current = e.GetPosition(null);
+			if ((current - _mouseDownPoint).Length > 4)
+			{
+				_drag = true;
+			}
 			var delta = current - _dragLastPosition;
 			_dragLastPosition = current;
-			if (this.DXCanvas.Scene != null)
+			var scene = this.DXCanvas?.Scene as Scene;
+			if (scene != null && this.DXCanvas.ActualWidth > 0)
 			{
-				((Scene)this.DXCanvas.Scene).MoveDelta((float)delta.X, (float)delta.Y, (float)(72f / this.DXCanvas.ActualWidth) * 1.5f, 20f);
+				scene.MoveDelta((float)delta.X, (float)delta.Y, (float)(72f / this.DXCanvas.ActualWidth) * 1.5f, 20f);
 			}
 		}
 
 		public void MouseDown(object sender, MouseButtonEventArgs e)
 		{
+			if (e.ChangedButton != MouseButton.Left) return;
+
 			if (_doubleClickDetected) _doubleClickDetected = false;
 			else
 			if ((DateTime.Now - _doubleClickFirst).TotalMilliseconds < 250)
@@ -1025,13 +1220,23 @@ namespace Bivrost.Bivrost360Player
 			_mouseDownPoint = e.GetPosition(null);
 			_dragLastPosition = _mouseDownPoint;
 			_drag = false;
-			_element = (IInputElement)e.Source;
-			_element.CaptureMouse();
-			_element.MouseMove += MouseMove;
+			if (_element != null)
+			{
+				_element.MouseMove -= MouseMove;
+				_element.ReleaseMouseCapture();
+			}
+			_element = e.Source as IInputElement;
+			if (_element != null)
+			{
+				_element.CaptureMouse();
+				_element.MouseMove += MouseMove;
+			}
 		}
 
 		public void MouseUp(MouseButtonEventArgs e)
 		{
+			if (e.ChangedButton != MouseButton.Left) return;
+
 			if (!_waitingForDoubleClickTimeout)
 			{
 				_waitingPoint = e.GetPosition(null);
@@ -1039,17 +1244,14 @@ namespace Bivrost.Bivrost360Player
 				Task.Factory.StartNew(() =>
 				{
 					Thread.Sleep(280);
-					Execute.OnUIThread(() =>
+					if (ended) return;
+					Execute.OnUIThreadAsync(() =>
 				   {
 					   if (!_doubleClickDetected)
 					   {
 						   if (_mouseDownPoint == _waitingPoint && !_drag)
 						   {
 							   PlayPause();
-						   }
-						   else
-						   {
-
 						   }
 					   }
 					   _waitingForDoubleClickTimeout = false;
@@ -1061,6 +1263,7 @@ namespace Bivrost.Bivrost360Player
 			{
 				_element.ReleaseMouseCapture();
 				_element.MouseMove -= MouseMove;
+				_element = null;
 			}
 		}
 #endregion
@@ -1118,10 +1321,12 @@ namespace Bivrost.Bivrost360Player
 
 		public void OnLostFocus()
 		{
+			InputDevices.KeyboardInputDevice.ClearAllKeys();
 			if (IsPlaying)
 			{
-				if (this.DXCanvas.Scene != null)
-					((Scene)this.DXCanvas.Scene).HasFocus = false;
+				var scene = this.DXCanvas?.Scene as Scene;
+				if (scene != null)
+					scene.HasFocus = false;
 			}
 		}
 
@@ -1129,10 +1334,11 @@ namespace Bivrost.Bivrost360Player
 		{
 			if (IsPlaying)
 			{
-                if (this.DXCanvas.Scene != null)
+                var scene = this.DXCanvas?.Scene as Scene;
+                if (scene != null)
                 {
-                    ((Scene)this.DXCanvas.Scene).HasFocus = true;
-                    this.shellView.PlayPause.Focus();
+                    scene.HasFocus = true;
+                    this.shellView?.PlayPause.Focus();
                 }
 			}
 		}
@@ -1164,15 +1370,33 @@ namespace Bivrost.Bivrost360Player
 			NotifyOfPropertyChange(() => VolumeTooltip);
 		}
 
+		public void AdjustVolumeFromVR(int direction)
+		{
+			if (direction == 0) return;
+			Execute.OnUIThreadAsync(() =>
+			{
+				if (VolumeRocker == null) return;
+				VolumeRocker.AdjustVolume(Math.Sign(direction) * 0.05);
+				NotifyOfPropertyChange(() => VolumeTooltip);
+			});
+		}
+
+		public void ToggleFavoriteCurrentMediaFromVR()
+		{
+			string path = SelectedServiceResult?.originalURL;
+			if (!string.IsNullOrWhiteSpace(path) && File.Exists(path))
+			{
+				Favorites.ToggleFavorite(path, isDirectory: false);
+				CurrentHeadset?.RefreshUI();
+			}
+		}
+
 		public void FastForward()
 		{
 			//space press hack
 			Execute.OnUIThread(() => shellView.VideoProgressBar.Focus());
 
-			if (IsPlaying)
-			{
-				_mediaDecoder.Seek(_mediaDecoder.CurrentPosition + 5f);
-			}
+			SeekRelative(5);
 		}
 
 		public void FastRewind()
@@ -1180,10 +1404,7 @@ namespace Bivrost.Bivrost360Player
 			//space press hack
 			Execute.OnUIThread(() => shellView.VideoProgressBar.Focus());
 
-			if (IsPlaying)
-			{
-				_mediaDecoder.Seek(_mediaDecoder.CurrentPosition - 5f);
-			}
+			SeekRelative(-5);
 		}
 
 		public void HeadsetSelect()
@@ -1193,33 +1414,121 @@ namespace Bivrost.Bivrost360Player
 
 
  
-#region menu options: projection
-		protected void SetProjection(ProjectionMode projection)
+#region menu options: projection & stereoscopy
+		private void NotifyProjectionAndStereoChanged()
 		{
-			_mediaDecoder.Projection = projection;
-
-			//if (DXCanvas.Scene != null)
-			//{
-			//	Scene scene = (Scene)DXCanvas.Scene;
-			//	scene.UpdateSceneSettings(projection, VideoMode.Autodetect);
-			//}
-
-			//UpdateVRSceneSettings(
-			//	projection.GetValueOrDefault(ProjectionMode.Sphere), 
-			//	VideoMode.Autodetect
-			//);
-
-
-
-			//void UpdateVRSceneSettings(ProjectionMode projectionMode, VideoMode videoMode)
-			//{
-			//	CurrentHeadset?.UpdateSceneSettings(projectionMode, videoMode);
-			//}
-
 			NotifyOfPropertyChange(() => ProjectionIsAuto);
 			NotifyOfPropertyChange(() => ProjectionIsEquirectangular);
 			NotifyOfPropertyChange(() => ProjectionIsCubeFacebook);
 			NotifyOfPropertyChange(() => ProjectionIsDome);
+			NotifyOfPropertyChange(() => ProjectionIsFisheye180);
+			NotifyOfPropertyChange(() => ProjectionIsMesh180);
+
+			NotifyOfPropertyChange(() => StereoIsAuto);
+			NotifyOfPropertyChange(() => StereoIsMono);
+			NotifyOfPropertyChange(() => StereoIsSideBySide);
+			NotifyOfPropertyChange(() => StereoIsSideBySideReversed);
+			NotifyOfPropertyChange(() => StereoIsTopBottom);
+			NotifyOfPropertyChange(() => StereoIsTopBottomReversed);
+
+			CurrentHeadset?.RefreshUI();
+		}
+
+		protected void SetProjection(ProjectionMode projection)
+		{
+			_mediaDecoder.Projection = projection;
+			NotifyProjectionAndStereoChanged();
+		}
+
+		protected void SetStereoMode(VideoMode stereoMode)
+		{
+			_mediaDecoder.StereoMode = stereoMode;
+			NotifyProjectionAndStereoChanged();
+		}
+
+		private static readonly ProjectionMode[] ProjectionCycleOrder = new[]
+		{
+			ProjectionMode.Autodetect,
+			ProjectionMode.Sphere,
+			ProjectionMode.Dome,
+			ProjectionMode.Fisheye180,
+			ProjectionMode.Mesh180,
+			ProjectionMode.CubeFacebook
+		};
+
+		private static readonly VideoMode[] StereoCycleOrder = new[]
+		{
+			VideoMode.Autodetect,
+			VideoMode.SideBySide,
+			VideoMode.TopBottom,
+			VideoMode.Mono,
+			VideoMode.SideBySideReversed,
+			VideoMode.TopBottomReversed
+		};
+
+		public void CycleProjectionFromVR()
+		{
+			Execute.OnUIThreadAsync(() =>
+			{
+				int idx = Array.IndexOf(ProjectionCycleOrder, _mediaDecoder.Projection);
+				ProjectionMode next = ProjectionCycleOrder[(idx + 1) % ProjectionCycleOrder.Length];
+				SetProjection(next);
+				CurrentHeadset?.NotifyStatusMessage($"Projection: {FormatProjectionLabel(next)}", 1.0);
+			});
+		}
+
+		public void CycleStereoModeFromVR()
+		{
+			Execute.OnUIThreadAsync(() =>
+			{
+				int idx = Array.IndexOf(StereoCycleOrder, _mediaDecoder.StereoMode);
+				VideoMode next = StereoCycleOrder[(idx + 1) % StereoCycleOrder.Length];
+				SetStereoMode(next);
+				CurrentHeadset?.NotifyStatusMessage($"Stereoscopy: {FormatStereoLabel(next)}", 1.0);
+			});
+		}
+
+		public void RecenterViewFromVR()
+		{
+			CurrentHeadset?.RequestRecenterView();
+		}
+
+		public void ReportRecenterProgressFromVR(float progress)
+		{
+			CurrentHeadset?.NotifyRecenterProgress(progress);
+		}
+
+		public void ReportHoldProgressFromVR(string label, float progress)
+		{
+			CurrentHeadset?.NotifyHoldProgress(label, progress);
+		}
+
+		private static string FormatProjectionLabel(ProjectionMode mode)
+		{
+			switch (mode)
+			{
+				case ProjectionMode.Autodetect: return "Auto";
+				case ProjectionMode.Sphere: return "360° Sphere";
+				case ProjectionMode.Dome: return "180° Dome (_LR)";
+				case ProjectionMode.Fisheye180: return "Fisheye 180°";
+				case ProjectionMode.Mesh180: return "Mesh 180°";
+				case ProjectionMode.CubeFacebook: return "Cubemap 360°";
+				default: return mode.ToString();
+			}
+		}
+
+		private static string FormatStereoLabel(VideoMode mode)
+		{
+			switch (mode)
+			{
+				case VideoMode.Autodetect: return "Auto";
+				case VideoMode.SideBySide: return "Side-by-Side (_LR)";
+				case VideoMode.TopBottom: return "Top-Bottom (_TB)";
+				case VideoMode.Mono: return "Mono (2D)";
+				case VideoMode.SideBySideReversed: return "SBS Reversed (_RL)";
+				case VideoMode.TopBottomReversed: return "TB Reversed (_BT)";
+				default: return mode.ToString();
+			}
 		}
 
 		public bool ProjectionIsAuto
@@ -1241,6 +1550,47 @@ namespace Bivrost.Bivrost360Player
 		{
 			get { return _mediaDecoder.Projection == ProjectionMode.Dome; }
 			set { if (value) SetProjection(ProjectionMode.Dome); }
+		}
+		public bool ProjectionIsFisheye180
+		{
+			get { return _mediaDecoder.Projection == ProjectionMode.Fisheye180; }
+			set { if (value) SetProjection(ProjectionMode.Fisheye180); }
+		}
+		public bool ProjectionIsMesh180
+		{
+			get { return _mediaDecoder.Projection == ProjectionMode.Mesh180; }
+			set { if (value) SetProjection(ProjectionMode.Mesh180); }
+		}
+
+		public bool StereoIsAuto
+		{
+			get { return _mediaDecoder.StereoMode == VideoMode.Autodetect; }
+			set { if (value) SetStereoMode(VideoMode.Autodetect); }
+		}
+		public bool StereoIsMono
+		{
+			get { return _mediaDecoder.StereoMode == VideoMode.Mono; }
+			set { if (value) SetStereoMode(VideoMode.Mono); }
+		}
+		public bool StereoIsSideBySide
+		{
+			get { return _mediaDecoder.StereoMode == VideoMode.SideBySide; }
+			set { if (value) SetStereoMode(VideoMode.SideBySide); }
+		}
+		public bool StereoIsSideBySideReversed
+		{
+			get { return _mediaDecoder.StereoMode == VideoMode.SideBySideReversed; }
+			set { if (value) SetStereoMode(VideoMode.SideBySideReversed); }
+		}
+		public bool StereoIsTopBottom
+		{
+			get { return _mediaDecoder.StereoMode == VideoMode.TopBottom; }
+			set { if (value) SetStereoMode(VideoMode.TopBottom); }
+		}
+		public bool StereoIsTopBottomReversed
+		{
+			get { return _mediaDecoder.StereoMode == VideoMode.TopBottomReversed; }
+			set { if (value) SetStereoMode(VideoMode.TopBottomReversed); }
 		}
 #endregion
 
@@ -1310,16 +1660,9 @@ namespace Bivrost.Bivrost360Player
 
 		public string Header
 		{
-			get {
-				switch(Path.GetExtension(recent.uri).ToLowerInvariant())
-				{
-					//case ".jpg":
-					//case ".jpeg":
-					//case ".png":
-					//	return recent.title + " 📷"; //  (🖼)
-					default:
-						return recent.title;
-				}
+			get
+			{
+				return recent?.title ?? string.Empty;
 			}
 		}
 		public ICommand Command

@@ -17,7 +17,10 @@ namespace Bivrost.Bivrost360Player.Streaming
 
         public override bool CanParse(string url)
         {
-            var uri = new Uri(url);
+            if (string.IsNullOrWhiteSpace(url))
+                return false;
+            if (!Uri.TryCreate(url, UriKind.Absolute, out Uri uri))
+                return false;
             return uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps;
         }
 
@@ -29,10 +32,28 @@ namespace Bivrost.Bivrost360Player.Streaming
 			// TODO: search for bivrost-360webplayer tags
 
 			var container = GuessContainerFromExtension(uri);
+			string title;
+			try
+			{
+				string fileName = Path.GetFileName(ExtractInspectionPath(uri));
+				title = string.IsNullOrEmpty(fileName) ? uri : Uri.UnescapeDataString(fileName);
+			}
+			catch (Exception)
+			{
+				title = uri;
+			}
+			var projection = GuessProjectionFromFileName(uri);
+			if (projection == ProjectionMode.Autodetect)
+				projection = ProjectionMode.Dome;
+
+			var stereoscopy = GuessStereoscopyFromFileName(uri);
+			if (stereoscopy == VideoMode.Autodetect)
+				stereoscopy = VideoMode.SideBySide;
+
 			return new ServiceResult(uri, ServiceName, URIToMediaId(uri))
             {
-                projection = ProjectionMode.Sphere,
-				stereoscopy = GuessStereoscopyFromFileName(uri),
+                projection = projection,
+				stereoscopy = stereoscopy,
                 videoStreams = new List<VideoStream>()
                 {
                     new VideoStream()
@@ -43,7 +64,7 @@ namespace Bivrost.Bivrost360Player.Streaming
                     }
                 },
 				contentType = GuessContentTypeFromContainer(container),
-				title = Uri.UnescapeDataString(Path.GetFileName(uri))
+				title = title
 			};
         }
     }

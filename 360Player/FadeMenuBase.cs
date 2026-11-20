@@ -10,6 +10,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media.Animation;
+using System.Windows.Threading;
 
 namespace Bivrost.Bivrost360Player
 {
@@ -17,50 +18,55 @@ namespace Bivrost.Bivrost360Player
 	{
 		private Control view;
 		private DateTime lastMouse;
-		private BackgroundWorker visibilityWorker;
+		private DispatcherTimer visibilityTimer;
 		private bool visible = false;
 
 		protected override void OnViewLoaded(object view)
 		{
 			base.OnViewLoaded(view);
 			this.view = view as Control;
-			this.view.Opacity = 0;
-			this.view.IsHitTestVisible = false;
-			this.view.MouseMove += MouseMove;
+			if (this.view != null)
+			{
+				this.view.Opacity = 0;
+				this.view.IsHitTestVisible = false;
+				this.view.MouseMove += MouseMove;
+			}
 		}
 
 		protected override void OnDeactivate(bool close)
 		{
+			visibilityTimer?.Stop();
+			if (this.view != null)
+				this.view.MouseMove -= MouseMove;
 			base.OnDeactivate(close);
-			this.view.MouseMove -= MouseMove;
 		}
 
 		public void Show()
 		{
-			lastMouse = DateTime.Now;
-
-			if (!visible)
+			Execute.OnUIThread(() =>
 			{
-				visible = true;
-				Execute.OnUIThread(() => view.IsHitTestVisible = true);
-				Animate(true);
+				lastMouse = DateTime.Now;
 
-				visibilityWorker = new BackgroundWorker();
-				visibilityWorker.DoWork += (sender, parameters) =>
+				if (!visible && view != null)
 				{
-					while (visible)
-					{
+					visible = true;
+					view.IsHitTestVisible = true;
+					Animate(true);
 
-						if ((DateTime.Now - lastMouse).TotalSeconds > 2)
+					if (visibilityTimer == null)
+					{
+						visibilityTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
+						visibilityTimer.Tick += (sender, args) =>
 						{
-							Execute.OnUIThread(() => Hide());
-						}
-						else
-							Thread.Sleep(100);
+							if ((DateTime.Now - lastMouse).TotalSeconds > 2)
+							{
+								Hide();
+							}
+						};
 					}
-				};
-				visibilityWorker.RunWorkerAsync();
-			}
+					visibilityTimer.Start();
+				}
+			});
 		}
 
 		public void Hide()
@@ -70,12 +76,19 @@ namespace Bivrost.Bivrost360Player
 
 		public void Hide(float duration)
 		{
-			if (visible)
+			Execute.OnUIThread(() =>
 			{
-				visible = false;
-				view.IsHitTestVisible = false;
-				Animate(false, duration);
-			}
+				visibilityTimer?.Stop();
+				if (visible)
+				{
+					visible = false;
+					if (view != null)
+					{
+						view.IsHitTestVisible = false;
+						Animate(false, duration);
+					}
+				}
+			});
 		}
 
 		public void ToggleVisibility()
@@ -86,6 +99,7 @@ namespace Bivrost.Bivrost360Player
 
 		private void Animate(bool visible, float duration = 0.5f)
 		{
+			if (view == null) return;
 			Storyboard storyboard = new Storyboard();
 			DoubleAnimation opacityAnimation = new DoubleAnimation() { From = view.Opacity, To = visible ? 1 : 0, Duration = TimeSpan.FromSeconds(duration) };
 			Storyboard.SetTarget(opacityAnimation, view);

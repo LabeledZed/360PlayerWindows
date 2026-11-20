@@ -42,11 +42,14 @@ namespace Bivrost.Bivrost360Player
 		/// </summary>
         public void Open()
 		{
-			Url = Url.Trim();
+			Url = (Url ?? string.Empty).Trim();
 			
-			view.Open.IsEnabled = false;
-			view.Url.IsEnabled = false;
-			view.progressBar.Visibility = System.Windows.Visibility.Visible;
+			if (view != null)
+			{
+				view.Open.IsEnabled = false;
+				view.Url.IsEnabled = false;
+				view.progressBar.Visibility = System.Windows.Visibility.Visible;
+			}
 
 			TryClose(true);
 		}

@@ -21,7 +21,7 @@ namespace Bivrost.Bivrost360Player.Streaming
         public override bool CanParse(string uri)
 		{
 			if (uri == null) return false;
-			return Regex.IsMatch(uri, @"^(https?://)?(www.)?(embed.)?littlstar.com/videos/.+", RegexOptions.IgnoreCase);
+			return Regex.IsMatch(uri, @"^(https?://)?(www\.)?(embed\.)?littlstar\.com/videos/[a-zA-Z0-9]+", RegexOptions.IgnoreCase);
 		}
 
 
@@ -45,27 +45,31 @@ namespace Bivrost.Bivrost360Player.Streaming
 
 		public override ServiceResult Parse(string uri)
 		{
-			string id = Regex.Match(uri, @"^(https?://)?(www.)?(embed.)?littlstar.com/videos/([a-zA-Z0-9]+).*", RegexOptions.IgnoreCase).Groups[4].Value;
+			var idMatch = Regex.Match(uri ?? "", @"^(https?://)?(www\.)?(embed\.)?littlstar\.com/videos/([a-zA-Z0-9]+)", RegexOptions.IgnoreCase);
+			if (!idMatch.Success)
+				throw new StreamParsingFailed("Could not extract Littlstar video id from URI: " + uri);
+			string id = idMatch.Groups[4].Value;
 			string html = HTTPGetString("https://embed.littlstar.com/videos/" + id);
-			string json = Regex.Match(html, @"window.__mediaData__\s*=\s*(.+);").Groups[1].Value;
-			JObject jobject = JObject.Parse(json);
+			var jsonMatch = Regex.Match(html ?? "", @"window\.__mediaData__\s*=\s*(\{.+?\});", RegexOptions.Singleline);
+			if (!jsonMatch.Success)
+				throw new StreamParsingFailed("Could not find Littlstar media metadata.");
 
-			//var node = document.DocumentNode.Descendants()
-			//	.Where(n => n.Name == "a" && n.GetAttributeValue("class", "")
-			//	.Contains("download"))
-			//	.First()
-			//	.GetAttributeValue("href", "");
+			JObject jobject;
+			try
+			{
+				jobject = JObject.Parse(jsonMatch.Groups[1].Value);
+			}
+			catch (Exception ex)
+			{
+				throw new StreamParsingFailed("Failed to parse Littlstar media JSON.", ex);
+			}
 
-			// naive implementation
-			//var node = document.DocumentNode.Descendants()
-			//	.Where(n => n.Name == "meta" && n.GetAttributeValue("property", "")
-			//	.Contains("og:video") && n.GetAttributeValue("content", "")
-			//	.EndsWith(".mp4"))
-			//	.First()
-			//	.GetAttributeValue("content", "");
+			var versions = jobject.GetValue("versions") as JObject;
+			if (versions == null)
+				throw new StreamParsingFailed("Littlstar media JSON contains no versions.");
 
 			List<VideoStream> videostreams = new List<VideoStream>();
-			foreach(JProperty kvp in jobject.GetValue("versions"))
+			foreach (JProperty kvp in versions.Properties())
 			{
 				switch(kvp.Name)
 				{
@@ -182,7 +186,7 @@ namespace Bivrost.Bivrost360Player.Streaming
 			}
 
             string originalURL = "https://www.littlstar.com/videos/" + id;
-            return new ServiceResult(originalURL, ServiceName, originalURL)
+            return new ServiceResult(originalURL, ServiceName, URIToMediaId(originalURL))
 			{
 				projection = ProjectionMode.Sphere,
 				stereoscopy = VideoMode.Mono,
